@@ -16,6 +16,7 @@
     "@tracepilot/store": "workspace:*",
     "@tracepilot/analysis": "workspace:*",
     "@tracepilot/agents": "workspace:*",
-    "@tracepilot/eval": "workspace:*"
+    "@tracepilot/eval": "workspace:*",
+    "zod": "4.6.7"
   }
 }

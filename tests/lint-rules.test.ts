@@ -24,6 +24,11 @@ describe('information boundary', () => {
     ['apps/server/src/x.ts', "import { a } from '../../../packages/sim/src/engine.ts';"],
     ['apps/web/src/x.ts', "import { a } from '@tracepilot/sim';"],
     ['packages/sim/src/x.ts', "import { a } from '@tracepilot/eval';"],
+    ['packages/analysis/src/x.ts', "import { a } from '@tracepilot/store';"],
+    ['packages/analysis/src/x.ts', "import { a } from 'node:fs';"],
+    ['packages/analysis/src/x.ts', "import { a } from 'better-sqlite3';"],
+    ['packages/store/src/x.ts', "import { a } from 'node:fs';"],
+    ['packages/store/src/x.ts', "import { a } from 'fs/promises';"],
   ];
   it.each(forbidden)('%s rejects: %s', async (file, code) => {
     expect(await ruleIds(`${code}\nexport const b = a;\n`, file)).toContain(
@@ -38,6 +43,10 @@ describe('information boundary', () => {
     ['apps/server/src/x.ts', "import { a } from '@tracepilot/sim';"],
     ['packages/cli/src/x.ts', "import { a } from '@tracepilot/eval';"],
     ['eval/src/x.ts', "import { a } from '@tracepilot/sim';"],
+    ['packages/agents/src/x.ts', "import { a } from '@tracepilot/store';"],
+    ['packages/store/src/x.ts', "import { a } from 'better-sqlite3';"],
+    ['packages/store/src/x.test.ts', "import { a } from 'node:fs';"],
+    ['packages/analysis/src/x.ts', "import { a } from '@tracepilot/schema';"],
   ];
   it.each(allowed)('%s allows: %s', async (file, code) => {
     expect(await ruleIds(`${code}\nexport const b = a;\n`, file)).not.toContain(

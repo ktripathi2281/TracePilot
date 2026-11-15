@@ -53,6 +53,46 @@ const NO_CRYPTO_RANDOM = ['crypto', 'node:crypto'].map((name) => ({
 }));
 
 /**
+ * Analysis is pure: no I/O of any kind, and it does not even see the store. It receives
+ * telemetry from its caller, so nothing but telemetry can reach it (brief §4).
+ */
+const NO_IO = [
+  {
+    group: [
+      'fs',
+      'node:fs',
+      'fs/*',
+      'node:fs/*',
+      'child_process',
+      'node:child_process',
+      'net',
+      'node:net',
+      'http',
+      'node:http',
+      'https',
+      'node:https',
+      'better-sqlite3',
+      '@tracepilot/store',
+      '@tracepilot/store/*',
+      '**/store/src/**',
+    ],
+    message:
+      'Analyzers are pure functions over telemetry passed in: no I/O, no store access (brief §4).',
+  },
+];
+
+/**
+ * The store's only file is its own SQLite database. Without filesystem access it cannot read
+ * simulator recordings even by accident (Phase 2 information boundary).
+ */
+const NO_FS = [
+  {
+    group: ['fs', 'node:fs', 'fs/*', 'node:fs/*'],
+    message: 'The store reads and writes only its SQLite database; no direct filesystem access.',
+  },
+];
+
+/**
  * @param {{ patterns: Array<{group: string[], message: string}>, paths?: Array<{name: string, importNames?: string[], message: string}> }} opts
  * @returns {import('eslint').Linter.RulesRecord}
  */
@@ -96,9 +136,19 @@ export default tseslint.config(
     files: ['eval/**', 'packages/cli/**'],
     rules: restrictImports({ patterns: NO_SIM_INTERNALS }),
   },
-  // agents, store, analysis, schema: no sim, no eval.
+  // agents, schema: no sim, no eval.
   {
-    files: ['packages/agents/**', 'packages/store/**', 'packages/schema/**'],
+    files: ['packages/agents/**', 'packages/schema/**'],
+    rules: restrictImports({ patterns: [...NO_EVAL, ...NO_SIM] }),
+  },
+  // store: no sim, no eval, no filesystem. Its tests may use node:fs to inspect the DB file.
+  {
+    files: ['packages/store/**'],
+    ignores: ['packages/store/**/*.test.ts'],
+    rules: restrictImports({ patterns: [...NO_EVAL, ...NO_SIM, ...NO_FS] }),
+  },
+  {
+    files: ['packages/store/**/*.test.ts'],
     rules: restrictImports({ patterns: [...NO_EVAL, ...NO_SIM] }),
   },
   // server: no eval, only the public sim entry (needed for replay in Phase 4/5).
@@ -133,10 +183,13 @@ export default tseslint.config(
       ],
     },
   },
-  // analysis must derive everything from telemetry, never from sim config.
+  // analysis must derive everything from telemetry, never from sim config, and does no I/O.
   {
     files: ['packages/analysis/**'],
-    rules: restrictImports({ patterns: [...NO_EVAL, ...NO_SIM], paths: NO_CRYPTO_RANDOM }),
+    rules: restrictImports({
+      patterns: [...NO_EVAL, ...NO_SIM, ...NO_IO],
+      paths: NO_CRYPTO_RANDOM,
+    }),
   },
   {
     files: ['packages/sim/**'],

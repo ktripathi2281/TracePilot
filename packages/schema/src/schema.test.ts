@@ -165,10 +165,12 @@ describe('telemetry', () => {
 
 describe('topology', () => {
   it('requires edges to reference nodes', () => {
-    const node = (service: string) => ({ service, spanCount: 1, errorCount: 0 });
+    const node = (service: string) => ({ service, kind: 'service', spanCount: 1, errorCount: 0 });
     const edge = {
       from: 'checkout',
       to: 'db',
+      kind: 'database',
+      callerOperations: ['place-order'],
       callCount: 10,
       errorCount: 0,
       latencyP50Us: 1,
@@ -176,11 +178,19 @@ describe('topology', () => {
       evidenceIds: [`sp_${SPAN}`],
     };
     expect(
-      DependencyGraph.safeParse({ nodes: [node('checkout'), node('db')], edges: [edge] }).success,
+      DependencyGraph.safeParse({
+        nodes: [node('checkout'), node('db')],
+        edges: [edge],
+        entryServices: ['checkout'],
+      }).success,
     ).toBe(true);
-    expect(DependencyGraph.safeParse({ nodes: [node('checkout')], edges: [edge] }).success).toBe(
-      false,
-    );
+    expect(
+      DependencyGraph.safeParse({
+        nodes: [node('checkout')],
+        edges: [edge],
+        entryServices: ['checkout'],
+      }).success,
+    ).toBe(false);
   });
 });
 

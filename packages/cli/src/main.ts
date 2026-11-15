@@ -1,16 +1,26 @@
 // The `tracepilot` command (brief §9). Phase 1 implements `sim run`; the other commands arrive
 // with their phases and say so instead of pretending.
+//
+// Data layout under --out (default .data):
+//   telemetry.db            the telemetry store. Telemetry only, incidents under neutral IDs.
+//                           This is what the investigator can reach (through store queries).
+//   sim/<incidentId>.json   PRIVATE: scenario name, seed and the full recording (system model +
+//                           workload) needed to replay. Read only by the simulator side (replay,
+//                           eval). The store has no API that reads it.
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
+  Recording,
   SCENARIOS,
   findTelemetryProblems,
   hashTelemetry,
   recordScenario,
   runSimulation,
 } from '@tracepilot/sim';
+import { TelemetryStore } from '@tracepilot/store';
+import { z } from 'zod';
 
 export interface Io {
   out: (line: string) => void;
@@ -19,7 +29,7 @@ export interface Io {
 
 const USAGE = `tracepilot <command>
 
-  sim run --scenario <name> [--seed <n>] [--out <dir>]   generate telemetry for a scenario
+  sim run --scenario <name> [--seed <n>] [--out <dir>]   simulate a scenario and ingest its telemetry
 
 Scenarios: ${Object.keys(SCENARIOS).join(', ')}
 
@@ -33,25 +43,29 @@ const LATER: Readonly<Record<string, string>> = {
   eval: 'Phase 6',
 };
 
-export interface SimRunManifest {
-  scenario: string;
-  seed: number;
-  durationUs: number;
-  /** SHA-256 of the telemetry. Re-running recording.json must reproduce it exactly. */
-  telemetryHash: string;
-  counts: {
-    requests: number;
-    spans: number;
-    logs: number;
-    metrics: number;
-    changeEvents: number;
-    podEvents: number;
-  };
-  files: string[];
-}
+export const STORE_FILE = 'telemetry.db';
+export const SIM_DIR = 'sim';
 
-const jsonl = (items: readonly unknown[]): string =>
-  items.map((item) => JSON.stringify(item)).join('\n') + (items.length > 0 ? '\n' : '');
+/** The private, simulator-side record of a simulated incident. */
+export const SimRecordingFile = z.strictObject({
+  formatVersion: z.literal(1),
+  incidentId: z.string(),
+  scenario: z.string(),
+  seed: z.number().int().nonnegative(),
+  /** Must equal the store's telemetry hash for the incident; replays are checked against it. */
+  telemetryHash: z.string(),
+  recording: Recording,
+});
+export type SimRecordingFile = z.infer<typeof SimRecordingFile>;
+
+export const simRecordingPath = (outDir: string, incidentId: string): string =>
+  join(outDir, SIM_DIR, `${incidentId}.json`);
+
+export function readSimRecording(outDir: string, incidentId: string): SimRecordingFile {
+  return SimRecordingFile.parse(
+    JSON.parse(readFileSync(simRecordingPath(outDir, incidentId), 'utf8')),
+  );
+}
 
 function simRun(args: string[], io: Io): number {
   const { values } = parseArgs({
@@ -80,51 +94,46 @@ function simRun(args: string[], io: Io): number {
 
   const recording = recordScenario(values.scenario, seed);
   const { telemetry } = runSimulation(recording.config, recording.workload);
-  // Same validation an ingestor would apply (brief §2). Never write telemetry that fails it.
+  // Same validation an ingestor would apply (brief §2). Never store telemetry that fails it.
   const problems = findTelemetryProblems(telemetry);
   if (problems.length > 0) {
     io.err(`sim run: generated telemetry is invalid:\n- ${problems.join('\n- ')}`);
     return 1;
   }
 
-  const dir = join(values.out, `${values.scenario}-seed${String(seed)}`);
-  mkdirSync(dir, { recursive: true });
-  const files: Record<string, string> = {
-    'recording.json': JSON.stringify(recording),
-    'spans.jsonl': jsonl(telemetry.spans),
-    'logs.jsonl': jsonl(telemetry.logs),
-    'metrics.jsonl': jsonl(telemetry.metrics),
-    'change-events.jsonl': jsonl(telemetry.changeEvents),
-    'pod-events.jsonl': jsonl(telemetry.podEvents),
-  };
-  const manifest: SimRunManifest = {
+  mkdirSync(join(values.out, SIM_DIR), { recursive: true });
+  const storePath = join(values.out, STORE_FILE);
+  const store = new TelemetryStore(storePath);
+  let result;
+  try {
+    result = store.ingest(telemetry, { source: 'synthetic' });
+  } finally {
+    store.close();
+  }
+  const { incident, created } = result;
+  const telemetryHash = hashTelemetry(telemetry);
+  if (telemetryHash !== incident.telemetryHash) {
+    io.err('sim run: the store hashed the telemetry differently than the simulator');
+    return 1;
+  }
+  const file: SimRecordingFile = {
+    formatVersion: 1,
+    incidentId: incident.id,
     scenario: values.scenario,
     seed,
-    durationUs: recording.config.durationUs,
-    telemetryHash: hashTelemetry(telemetry),
-    counts: {
-      requests: recording.workload.requests.length,
-      spans: telemetry.spans.length,
-      logs: telemetry.logs.length,
-      metrics: telemetry.metrics.length,
-      changeEvents: telemetry.changeEvents.length,
-      podEvents: telemetry.podEvents.length,
-    },
-    files: Object.keys(files),
+    telemetryHash,
+    recording,
   };
-  for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
-  writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  writeFileSync(simRecordingPath(values.out, incident.id), JSON.stringify(file));
 
-  const c = manifest.counts;
-  io.out(
-    `scenario   ${manifest.scenario} (seed ${String(seed)}, ${String(manifest.durationUs / 60_000_000)} min virtual time)`,
-  );
-  io.out(`workload   ${String(c.requests)} requests`);
+  const c = incident.counts;
+  io.out(`incident   ${incident.id}${created ? '' : ' (already in the store)'}`);
   io.out(
     `telemetry  ${String(c.spans)} spans, ${String(c.logs)} logs, ${String(c.metrics)} metric points, ${String(c.changeEvents)} change events`,
   );
-  io.out(`hash       ${manifest.telemetryHash}`);
-  io.out(`written to ${dir}`);
+  io.out(`hash       ${telemetryHash}`);
+  io.out(`store      ${storePath}`);
+  io.out(`recording  ${simRecordingPath(values.out, incident.id)} (simulator side only)`);
   return 0;
 }
 

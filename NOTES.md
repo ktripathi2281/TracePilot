@@ -273,3 +273,181 @@ true unconditionally in this kind of system, and the tests say exactly where it 
   the gateway), so "which service timed out first" has to be read from span timing, not status.
 - Scenario A's incident never recovers within the 15-minute run (no remediation is recorded).
 - Workloads are stationary Poisson per request type; no bursts or daily shape.
+
+---
+
+## Phase 2 — Store, analysis library, Gate 2 (2026-11-15)
+
+### What exists
+
+- `packages/store`: SQLite telemetry store (`better-sqlite3`). Ingest validates every item through
+  the telemetry schemas and writes atomically; queries for metric series, spans (by service, name,
+  status, roots, time), whole traces, traces grouped by root start, logs (level, text, service,
+  trace, time), change and pod events; `getEvidence` resolves any evidence ID; `exportTelemetry`
+  round-trips exactly (same canonical hash).
+- `packages/analysis`: pure analyzers over telemetry passed in:
+  - `windows`: incident window inference
+  - `anomaly`: anomaly detector
+  - `precedence` + `onsets`: onset intervals and span-refined onsets
+  - `graph`: dependency graph
+  - `traces` + `attribution`: critical path and latency attribution
+  - `saturation`: USE method
+  - `holdwait`: hold-and-wait analyzer
+  - `propagation`
+  - `changes`: change correlation
+  - `logs`: error-log bursts
+  - `compare`: window comparison with confidence intervals
+  - `timeline`
+- `eval/src/pipeline.ts`: the whole analysis of one incident through the store only (what Phase 3
+  tools will wrap). `eval/src/gate2.test.ts`: Gate 2 on seeds 42, 3, 7 plus two negative controls.
+- `tracepilot sim run` now ingests into `<out>/telemetry.db` and writes the replay recording to
+  `<out>/sim/<incidentId>.json`. It no longer writes telemetry dumps.
+- Checks at commit time: format ✔, lint ✔, typecheck ✔, tests ✔ (264: schema 22, sim 74, store 13,
+  analysis 62, CLI 8, lint rules 45, Gate 2 + controls 40).
+
+### Gate 2 status: passes
+
+All numbers below are computed by `analyzeIncident()` from the store, without any LLM. The first
+three rows are the gate itself.
+
+| Signal (seed 42)                        | Result                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pool saturation precedes latency rise   | Metric level: `db pool_in_use` and `checkout latency_p99` begin within one tick, so **inconclusive** (as required). Span level: the pool is observed full in ≥ 50 % of acquires from 10:00.050 (49 ms resolution); checkout requests turn slow or failing from 10:01.789 (420 ms resolution), so db leads by **1.74 s**. Seed 3: 3.50 s, seed 7: 3.12 s. |
+| Pool-acquire wait dominates attribution | Incident, critical-path shares. Successes (19): pool_acquire **68 %**, queue_wait 32 %. Failures (974): pool_acquire **57 %**, queue_wait 43 %. query_exec < 1 % in both. Baseline: query_exec 75 %, pool_acquire 0 %.                                                                                                                                   |
+| DB execution time flat                  | Per statement, exec = duration − DB-queue wait. Ratios 1.005–1.106; every 95 % interval is inside ±25 %, so `flat`. No `query_exec_p95` anomaly.                                                                                                                                                                                                         |
+| Hold-and-wait                           | Incident: pool 100 % used, 100 % of in-use connections idle-held, 99.4 % of transaction hold time spent waiting for further connections; holder checkout, waiters inventory and payment. Baseline: 40 % / 40 % / 0.1 %, so not detected.                                                                                                                 |
+| Propagation                             | Only origin: `db`, on all 4 failure paths, no precedence violation. Hops into db are ordered; same-request hops (gateway → checkout) stay inconclusive.                                                                                                                                                                                                  |
+| Red herring: inventory change `ev_1`    | Verdict **none**: inventory itself shows no anomaly, and the following upstream anomalies are explained by an earlier-or-equal anomaly in payment. Deploy `ev_2`: **correlated** (checkout error rate 5 s after).                                                                                                                                        |
+| Red herring: payment blip               | 10 anomalies, all `recovered` by 7:50; excluded from propagation ("recovered before the incident window started"); its log burst ended at 7:20.                                                                                                                                                                                                          |
+| Persistence                             | Seed 42 has a 30/30 pool sample at 7:30 (in the store); it is not an anomaly. No pool anomaly before the deploy on any seed.                                                                                                                                                                                                                             |
+| Negative control: no deploy             | Only a recovered episode; nothing saturated; no hold-and-wait; `ev_1` none.                                                                                                                                                                                                                                                                              |
+| Negative control: DB 2× slower          | Exec `up` for every statement with ≥ 100 samples; `query_exec_p95` anomaly up; query_exec 78 % vs pool_acquire 12 %; no hold-and-wait. The pool hits its limit only in short episodes (saturated share < 0.5, mean utilization 0.84), and the analyzer reports them as such.                                                                             |
+
+Mutation check run by hand: making the detector's persistence 1 fails 10 tests, including "does
+not blame the inventory config change".
+
+### Decisions (and deviations)
+
+1. **Storage: better-sqlite3 13.2.0.** It compiled from source here (Windows, Node 24: no
+   prebuild), so a C++ toolchain is needed where no prebuilt binary exists. It is allowed in
+   `pnpm.onlyBuiltDependencies`. `node:sqlite` would avoid the native build but is still
+   experimental; revisit if installation is a problem.
+2. **Information boundary, enforced three ways.**
+   - **Layout:** `telemetry.db` holds telemetry only. Recordings, scenario names and seeds live in
+     `sim/<incidentId>.json`, read only by the simulator side.
+   - **Lint:** the store may not import `node:fs`, so its only file is its own DB. Analysis may not
+     do any I/O or import the store: it receives telemetry, so nothing else can reach it.
+   - **Tests:** the store schema has no table or column for config, scenario, recording, workload,
+     seed or truth. The raw DB file contains none of `pool-exhaustion`, `maxParallelQueries`,
+     `requestTypes`, `disturbance`, `scenario`, while the private recording does contain them.
+3. **Neutral incident IDs:** `in_` + base36 of the first 52 bits of the canonical SHA-256 of the
+   telemetry (e.g. `in_rm6f1z3tf`). Ingest is idempotent (same telemetry → same incident).
+   Evidence IDs are unique within an incident only; every lookup is scoped by incident, because a
+   replay of a recording reuses the same span IDs.
+4. **The store re-validates rows through Zod on the way out.** It is a boundary like any other.
+   Cost: ~0.25 s to export 48k spans. Acceptable now.
+5. **The incident record is derived from telemetry only:** time range, metric interval (most
+   common gap), services, counts, hash. The store holds no "incident window": `inferIncidentWindows`
+   finds the symptom at the entry service (owner of root spans), preferring error rate over p99.
+   The baseline runs from 60 s warm-up to 60 s before the symptom.
+6. **Anomaly detector = robust baseline + two-tier persistence + hysteresis + onset interval.**
+   - **Strong rule:** 3 consecutive samples beyond 4 σ.
+   - **Sustained rule:** 6 consecutive samples beyond 2 σ (Western-Electric style).
+   - **Floors:** both thresholds are also bounded by a relative floor (25 % of the median) and an
+     absolute floor per unit.
+   - **Hysteresis:** an anomaly closes after 3 samples back inside 2 σ.
+
+   Why two tiers: scenario A's point-sampled `pool_in_use` has a baseline range of 4–30 (σ ≈ 6),
+   so a pool pinned at 30/30 for five minutes is only 3 σ per sample, and z = 4 alone missed it.
+   Single spikes still cannot open an anomaly under either rule.
+
+7. **Onsets are intervals, not points.** `onsetUs` is the first sample of the run that met a
+   persistence rule. The interval reaches back to the last sample before the run, because noisy
+   samples right next to a shift may be noise or the shift itself. The CUSUM change point
+   (slack z/2) is reported inside the interval. A CUSUM-only onset put `in_flight` onsets at 9:40
+   and 9:55, before the 10:00 deploy: false precision on noisy small-count gauges.
+8. **Precedence:** `inconclusive` whenever |Δ| ≤ the coarser resolution, so two metric onsets one
+   tick apart are a tie. On scenario A every metric-level comparison that matters is a tie;
+   ordering comes only from spans.
+9. **Span-refined onsets.**
+   - **Signal:** a server span counts as bad when it is slow (exceeds at start + threshold) or
+     failed (exceeds at its end). Slow alone never reaches a majority in an overload, because
+     ~98 % of checkout requests fail fast with 503.
+   - **Thresholds:** max(2 × baseline p99, p99 + 10 ms) per operation.
+   - **db:** acquires that saw `in_use ≥ capacity`.
+   - **Persistence:** ≥ 3 exceeding and a ≥ 50 % majority over max(one tick, the next 5
+     candidates). The duration part rejected a 50 ms burst of full-pool acquires at 9:48; the
+     count part lets sparse payment spans qualify.
+   - **Resolution:** the gap to the previous sampled candidate.
+   - **Acceptance:** a refinement replaces a metric onset only if it is no later than
+     metric onset + metric resolution; otherwise sampling missed the start.
+10. **Edge precedence uses the caller's operation, not the whole service.** Graph edges carry
+    `callerOperations`. Without this, seed 3's gateway looked anomalous before checkout because its
+    `stock` route (which never calls checkout) failed first.
+11. **Latency attribution:**
+    - **Method:** critical path (descend into the child that finished last; clip abandoned
+      children to the parent). The categories queue_wait / pool_acquire / db_queue / query_exec /
+      external / compute are exclusive and tile each request exactly.
+    - **Held connection:** reported as an overlay (time inside a `db.transaction`, and what
+      happened during it), not as a category.
+    - **Outcomes:** successes and failures are reported separately.
+    - **Downstream:** per service, `downstream` is the time spent waiting on services it called.
+12. **Saturation:**
+    - **Capacity:** worker and DB-executor limits are not exported as metrics, so capacity is
+      inferred as the highest concurrency seen while a queue existed at the same instant.
+      Otherwise the resource is `unknown-capacity`, never guessed.
+    - **Status:** `saturated` needs 3 consecutive samples at ≥ 95 % with the queue above
+      max(1, baseline p95).
+    - **saturatedShare:** added after the slow-DB control showed short real episodes. It separates
+      exhaustion (≈ 1) from episodes.
+13. **Change correlation:** relation (self / downstream / upstream / unrelated), intervening change,
+    and alternative origin (an anomaly no later than this one, in a dependency of the anomalous
+    service that is unrelated to the changed service). `correlated` needs an unexplained anomaly
+    in the changed service itself within 120 s.
+14. **Window comparison uses a ~95 % interval on the log-ratio of medians** (SE of the median ≈
+    1.2533 σ / √n). The verdict is `flat`, `up` or `down` only when the whole interval is on one
+    side of the ±25 % band, else `inconclusive`. Without it, seed 7's `update-payment` (14 samples,
+    ratio 1.275, interval [1.15, 1.42]) was called `up`.
+15. **Log bursts:** active buckets merged across gaps of up to 3 quiet buckets, because request
+    logs are trace-sampled and a real burst arrives scattered.
+16. **Schema changes:**
+    - `DependencyNode.kind`.
+    - `DependencyEdge.kind` and `callerOperations`.
+    - `DependencyGraph.entryServices`.
+17. **Ground truth:** the red herrings got machine-readable fields (`kind`, `changeEventId`,
+    `service`) so tests can use the file as the answer key.
+18. **Gate 2 lives in `eval/`**, the only package allowed to see both the simulator and the store.
+    `pipeline.ts` imports only store and analysis.
+
+### Assumptions
+
+- **Symptom detection:** the first pass of window inference uses robust statistics of the whole
+  series, which describe normal behaviour only if the incident covers less than half of the data.
+- **Instrumentation:**
+  - Root spans mark entry services.
+  - `db.transaction` spans mark held connections.
+  - `db.pool.acquire` carries `db.pool.in_use` / `db.pool.capacity` at request time.
+  - `db.query` carries `db.queue_wait_us`.
+    Real OTel instrumentation would need these conventions (or adapters).
+- **Database naming:** the database is the telemetry service `db`.
+
+### Known gaps
+
+- **Validation:** analyzer outputs are TypeScript types, not Zod schemas. Phase 3 must validate
+  them at the tool boundary.
+- **Scale:** the pipeline loads all spans of an incident into memory (48k spans: fine). Large
+  incidents need aggregate queries in the store.
+- **Capacity inference:** with 2 replicas, a queue on one replica can coexist with a free worker
+  on the other, so the inferred worker capacity can be low.
+- **Hold-and-wait inputs:** detection requires both views; without `db.transaction` spans only
+  the metric view (idle-held connections) remains, and `detected` is false.
+- **Fixed parameters:** change correlation uses a fixed 120 s lag, so slow-burn effects of a
+  change would be missed.
+- **Sparse operations:** operations with fewer than 20 baseline spans get no span refinement, and
+  the dependency graph comes from sampled traces, so rare edges may be missing.
+- **Flapping:** `db db_active_queries` (point samples) closes and reopens three times during the
+  incident.
+- **Migrations:** schema migrations are not handled (`CREATE TABLE IF NOT EXISTS` only); a schema
+  change needs a fresh `telemetry.db`.
+- **Generality:** Gate 2 covers one scenario on 3 seeds plus 2 controls. Scenarios B/C/D (Phase 6)
+  will test whether the analyzers generalize beyond this pattern.

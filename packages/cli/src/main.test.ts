@@ -1,10 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LogRecord, MetricPoint, Span } from '@tracepilot/schema';
-import { Recording, hashTelemetry, runSimulation } from '@tracepilot/sim';
+import { hashTelemetry, runSimulation } from '@tracepilot/sim';
+import { TelemetryStore, hashBundle } from '@tracepilot/store';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { main, type SimRunManifest } from './main.ts';
+import { STORE_FILE, main, readSimRecording } from './main.ts';
 
 const capture = () => {
   const out: string[] = [];
@@ -14,9 +14,9 @@ const capture = () => {
 
 describe('tracepilot sim run', () => {
   let dir: string;
-  let runDir: string;
   let stdout: string[];
   let code: number;
+  let incidentId: string;
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), 'tracepilot-cli-'));
     const c = capture();
@@ -25,54 +25,79 @@ describe('tracepilot sim run', () => {
       c.io,
     );
     stdout = c.out;
-    runDir = join(dir, 'pool-exhaustion-seed42');
+    incidentId = /^incident\s+(in_[0-9a-z]+)/.exec(stdout[0] ?? '')?.[1] ?? '';
   });
   afterAll(() => {
     rmSync(dir, { recursive: true, force: true });
   });
-  const read = (name: string): string => readFileSync(join(runDir, name), 'utf8');
-  const lines = (name: string): unknown[] =>
-    read(name)
-      .split('\n')
-      .filter((l) => l !== '')
-      .map((l) => JSON.parse(l) as unknown);
 
-  it('writes schema-valid telemetry files and a manifest', () => {
+  it('ingests the telemetry into the store under a neutral incident ID', () => {
     expect(code).toBe(0);
-    const manifest = JSON.parse(read('manifest.json')) as SimRunManifest;
-    expect(manifest.scenario).toBe('pool-exhaustion');
-    expect(manifest.seed).toBe(42);
-    const spans = lines('spans.jsonl');
-    expect(spans).toHaveLength(manifest.counts.spans);
-    expect(lines('logs.jsonl')).toHaveLength(manifest.counts.logs);
-    expect(lines('metrics.jsonl')).toHaveLength(manifest.counts.metrics);
-    expect(lines('change-events.jsonl')).toHaveLength(2);
-    expect(lines('pod-events.jsonl')).toHaveLength(0);
-    expect(spans.slice(0, 200).every((s) => Span.safeParse(s).success)).toBe(true);
+    expect(incidentId).toMatch(/^in_[0-9a-z]+$/);
+    expect(incidentId).not.toMatch(/pool|exhaust|seed|42/);
+    const store = new TelemetryStore(join(dir, STORE_FILE));
+    try {
+      const incident = store.getIncident(incidentId);
+      expect(incident.counts.spans).toBeGreaterThan(20_000);
+      expect(incident.counts.changeEvents).toBe(2);
+      expect(store.listIncidents().map((i) => i.id)).toEqual([incidentId]);
+      expect(stdout.join('\n')).toContain(incident.telemetryHash);
+    } finally {
+      store.close();
+    }
+    // Only the store and the simulator-side directory: no telemetry dumps next to them.
     expect(
-      lines('logs.jsonl')
-        .slice(0, 200)
-        .every((l) => LogRecord.safeParse(l).success),
-    ).toBe(true);
-    expect(
-      lines('metrics.jsonl')
-        .slice(0, 200)
-        .every((m) => MetricPoint.safeParse(m).success),
-    ).toBe(true);
-    expect(stdout.join('\n')).toContain(manifest.telemetryHash);
+      readdirSync(dir)
+        .filter((f) => !f.startsWith(`${STORE_FILE}-`))
+        .sort(),
+    ).toEqual(['sim', STORE_FILE]);
   });
 
-  it('identity replay from disk: recording.json reproduces the written telemetry exactly', () => {
-    const manifest = JSON.parse(read('manifest.json')) as SimRunManifest;
-    const recording = Recording.parse(JSON.parse(read('recording.json')));
-    const replay = runSimulation(recording.config, recording.workload);
-    expect(hashTelemetry(replay.telemetry)).toBe(manifest.telemetryHash);
-    expect(replay.telemetry.spans).toEqual(lines('spans.jsonl'));
-    expect(replay.telemetry.metrics).toEqual(lines('metrics.jsonl'));
-    expect(replay.telemetry.logs).toEqual(lines('logs.jsonl'));
+  it('identity replay: the private recording reproduces the stored telemetry exactly', () => {
+    const file = readSimRecording(dir, incidentId);
+    expect(file.incidentId).toBe(incidentId);
+    expect(file.scenario).toBe('pool-exhaustion');
+    const replay = runSimulation(file.recording.config, file.recording.workload);
+    const store = new TelemetryStore(join(dir, STORE_FILE));
+    try {
+      const stored = store.exportTelemetry(incidentId);
+      expect(hashTelemetry(replay.telemetry)).toBe(file.telemetryHash);
+      expect(hashBundle(stored)).toBe(file.telemetryHash);
+      expect(stored.spans).toEqual(replay.telemetry.spans);
+      expect(stored.metrics).toEqual(replay.telemetry.metrics);
+      expect(stored.logs).toEqual(replay.telemetry.logs);
+    } finally {
+      store.close();
+    }
   });
 
-  it('does not leak the incident ground truth into its output', () => {
+  it('keeps simulator configuration and the scenario name out of the store file', () => {
+    // The raw database file (all pages) must not contain anything simulator-side.
+    const bytes = readFileSync(join(dir, STORE_FILE)).toString('latin1');
+    for (const secret of [
+      'pool-exhaustion',
+      'maxParallelQueries',
+      'requestTypes',
+      'disturbance',
+      'scenario',
+      'seed42',
+    ]) {
+      expect(bytes.includes(secret), secret).toBe(false);
+    }
+    // ...while the private recording does contain it (so the check above is meaningful).
+    const recording = readFileSync(join(dir, 'sim', `${incidentId}.json`), 'utf8');
+    expect(recording).toContain('maxParallelQueries');
+  });
+
+  it('re-running the same scenario and seed is idempotent', () => {
+    const c = capture();
+    expect(
+      main(['sim', 'run', '--scenario', 'pool-exhaustion', '--seed', '42', '--out', dir], c.io),
+    ).toBe(0);
+    expect(c.out[0]).toBe(`incident   ${incidentId} (already in the store)`);
+  });
+
+  it('does not print ground truth', () => {
     expect(stdout.join('\n')).not.toMatch(/root cause|red herring|hold-and-wait|deadlock/i);
   });
 });

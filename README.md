@@ -2,10 +2,11 @@
 
 AI-native incident investigation + deterministic counterfactual replay for distributed backends.
 
-> **Status: Phase 1 (simulator + scenario A).** The schema package, the deterministic simulator,
-> the `pool-exhaustion` scenario and `tracepilot sim run` exist. The store, analysis, investigation
-> and replay product features do not yet. See [TRACEPILOT_BUILD_BRIEF.md](TRACEPILOT_BUILD_BRIEF.md)
-> for the plan and [NOTES.md](NOTES.md) for the decision log.
+> **Status: Phase 2 (store + analysis).** The deterministic simulator, the `pool-exhaustion`
+> scenario, the SQLite telemetry store and the analysis library exist. On scenario A the analyzers
+> find the root-cause signals without any LLM (Gate 2). Investigation and replay do not exist yet.
+> See [TRACEPILOT_BUILD_BRIEF.md](TRACEPILOT_BUILD_BRIEF.md) for the plan and [NOTES.md](NOTES.md)
+> for the decision log.
 
 ## The three rules
 
@@ -39,7 +40,8 @@ corepack pnpm run ci
 `ci` runs format check, lint, typecheck and tests. Individual steps: `lint`, `typecheck`, `test`,
 `format`.
 
-Generate scenario A (telemetry, a replayable recording and a manifest land in `.data/`):
+Simulate scenario A. Its telemetry goes into `.data/telemetry.db` under a neutral incident ID;
+the replay recording goes to `.data/sim/`, which only the simulator side reads:
 
 ```bash
 corepack pnpm run tracepilot sim run --scenario pool-exhaustion --seed 42 --out .data
@@ -50,3 +52,6 @@ Print what the scenario produces (baseline, incident, counterfactuals, pool swee
 ```bash
 corepack pnpm run calibrate
 ```
+
+The native SQLite driver (`better-sqlite3`) may compile during install; that needs a C++
+toolchain where no prebuilt binary exists.
