@@ -9,5 +9,8 @@ export default defineConfig({
       'tests/**/*.test.ts',
     ],
     environment: 'node',
+    // Simulator validity tests run full 15-minute scenarios several times.
+    testTimeout: 120_000,
+    hookTimeout: 120_000,
   },
 });

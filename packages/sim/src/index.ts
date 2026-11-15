@@ -1,6 +1,16 @@
 /**
- * @tracepilot/sim — deterministic discrete-event simulator (brief §3).
+ * @tracepilot/sim — deterministic discrete-event simulator (brief §3) and scenarios (§5).
  *
- * Placeholder created in Phase 0 (scaffold). Implementation lands in Phase 1.
+ * Public entry point. `packages/agents`, `packages/analysis` and `packages/store` must never
+ * import this package (enforced by ESLint): the investigator only sees telemetry.
  */
-export {};
+export * from './model.ts';
+export * from './engine.ts';
+export * from './knobs.ts';
+export * from './workload.ts';
+export * from './hash.ts';
+export * from './summary.ts';
+export * from './scenarios/index.ts';
+export * from './scenarios/pool-exhaustion.ts';
+export { uniform, sampleDist, mulberry32 } from './rng.ts';
+export { percentile } from './util.ts';

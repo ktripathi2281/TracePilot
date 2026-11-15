@@ -1,6 +1,5 @@
 /**
  * @tracepilot/cli — the `tracepilot` command (brief §9).
- *
- * Placeholder created in Phase 0 (scaffold). Implementation lands in Phase 1 (`sim run`) onward.
+ * Phase 1: `sim run`. `investigate`, `replay`, `sweep` and `eval` arrive with their phases.
  */
-export {};
+export { main, type Io, type SimRunManifest } from './main.ts';

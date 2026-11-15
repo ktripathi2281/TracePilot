@@ -1,0 +1,87 @@
+{
+  "scenario": "pool-exhaustion",
+  "note": "Ground truth for the eval harness (Phase 6). Never readable by packages/agents or apps/server. Times are virtual microseconds from simulation start.",
+  "rootCause": {
+    "summary": "The checkout v2.4.1 deploy exhausted the shared DB connection pool.",
+    "changeEventId": "ev_2",
+    "service": "checkout",
+    "resource": "db.pool",
+    "mechanism": "checkout holds one pooled connection for its order transaction while it calls inventory and payment, which need connections from the same pool (hold-and-wait). The deploy raised checkout workers 20 -> 60 and stock reservation fan-out 1 -> 4 with the pool still at 30. Demand rose to about 90% of the pool, queries began to wait, waiting kept transactions open longer, and with 60 workers checkout could hold all 30 connections while its own downstream queries starved."
+  },
+  "causalChain": [
+    {
+      "step": "checkout v2.4.1 deployed: workers 20 -> 60, reserveFanout 1 -> 4",
+      "service": "checkout",
+      "atUs": 600000000
+    },
+    { "step": "DB connection pool reaches 30/30 and a wait queue forms", "service": "db" },
+    {
+      "step": "db.pool.acquire waits grow to seconds and hit the 5 s acquire timeout in inventory, payment and checkout",
+      "service": "inventory"
+    },
+    {
+      "step": "checkout requests fail or take many seconds; all 60 checkout workers are busy, its queue fills and it rejects requests",
+      "service": "checkout"
+    },
+    {
+      "step": "api-gateway returns 5xx for checkout; stock requests slow to seconds because they share the pool",
+      "service": "api-gateway"
+    }
+  ],
+  "discriminatingEvidence": [
+    "pool_in_use equals pool_capacity and pool_wait_queue grows right after the deploy, not before",
+    "db.pool.acquire spans dominate the latency of slow traces",
+    "db.query execution time per statement is unchanged; db_active_queries drops; the DB executor queue stays empty",
+    "db.transaction spans in checkout stay open for seconds while child calls wait for connections",
+    "stock requests, which never touch checkout, also wait on db.pool.acquire"
+  ],
+  "affectedServices": ["checkout", "inventory", "payment", "api-gateway"],
+  "redHerrings": [
+    {
+      "what": "inventory config change ev_1 (request timeout 6s -> 8s)",
+      "atUs": 390000000,
+      "whyNotCausal": "No inventory request comes near either limit; reverting it leaves every request, span and metric identical."
+    },
+    {
+      "what": "payment provider latency blip",
+      "fromUs": 420000000,
+      "toUs": 440000000,
+      "whyNotCausal": "Self-resolving 2.5 minutes before the incident; no errors; pool never stays saturated."
+    }
+  ],
+  "rejectedAlternatives": [
+    {
+      "hypothesis": "The database is slow",
+      "contradictedBy": "per-statement query execution time is flat and the DB runs fewer queries than at baseline"
+    },
+    {
+      "hypothesis": "Payment (or its provider) is slow",
+      "contradictedBy": "payment latency is back to baseline 2.5 minutes before the incident"
+    },
+    {
+      "hypothesis": "The inventory config change caused it",
+      "contradictedBy": "no metric changes after ev_1; onset follows ev_2 within seconds"
+    }
+  ],
+  "fixes": {
+    "resolves": [
+      { "patch": { "revert": "ev_2" }, "expected": "errors 0, p99 back to baseline" },
+      {
+        "patch": { "target": "db.pool.capacity", "from": 30, "to": 64 },
+        "expected": "errors ~0; p99 above baseline because the DB executor becomes the next bottleneck"
+      }
+    ],
+    "partial": [
+      {
+        "patch": { "target": "checkout.workers", "from": 60, "to": 20 },
+        "expected": "no timeouts; latency bounded around 1 s; roughly a fifth of requests shed with fast 503s"
+      }
+    ],
+    "worsens": [
+      {
+        "patch": { "target": "db.acquireTimeoutUs", "from": 5000000, "to": 15000000 },
+        "expected": "connections are held longer; higher latency, more failures"
+      }
+    ]
+  }
+}

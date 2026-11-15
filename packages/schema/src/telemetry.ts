@@ -24,6 +24,8 @@ export const SPAN_NAMES = {
   dbQuery: 'db.query',
   /** Duration = time waiting in a service's request queue before a worker picks it up. */
   queueWait: 'queue.wait',
+  /** Duration = time one pooled connection is HELD by a transaction (granted → released). */
+  dbTransaction: 'db.transaction',
 } as const;
 
 /** Attribute keys the analyzers rely on. */
@@ -34,6 +36,17 @@ export const SPAN_ATTRS = {
   dbActiveQueriesAtStart: 'db.active_queries',
   requestType: 'request.type',
   pod: 'k8s.pod.name',
+  /** Statement or transaction name the connection/query is for. */
+  dbStatement: 'db.statement',
+  /** Part of a db.query span spent queued at the DB executor before execution started. */
+  dbQueueWaitUs: 'db.queue_wait_us',
+  httpStatus: 'http.status_code',
+  /** External (non-modeled) dependency an outbound span talks to. */
+  peerService: 'peer.service',
+  /** true when the work was abandoned because the caller gave up. */
+  cancelled: 'cancelled',
+  /** 1-based attempt number on retried calls. */
+  attempt: 'retry.attempt',
 } as const;
 
 export const Span = z

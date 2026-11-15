@@ -2,9 +2,10 @@
 
 AI-native incident investigation + deterministic counterfactual replay for distributed backends.
 
-> **Status: Phase 0 (scaffold).** Only the schema package is implemented. See
-> [TRACEPILOT_BUILD_BRIEF.md](TRACEPILOT_BUILD_BRIEF.md) for the plan and [NOTES.md](NOTES.md)
-> for the decision log.
+> **Status: Phase 1 (simulator + scenario A).** The schema package, the deterministic simulator,
+> the `pool-exhaustion` scenario and `tracepilot sim run` exist. The store, analysis, investigation
+> and replay product features do not yet. See [TRACEPILOT_BUILD_BRIEF.md](TRACEPILOT_BUILD_BRIEF.md)
+> for the plan and [NOTES.md](NOTES.md) for the decision log.
 
 ## The three rules
 
@@ -37,3 +38,15 @@ corepack pnpm run ci
 
 `ci` runs format check, lint, typecheck and tests. Individual steps: `lint`, `typecheck`, `test`,
 `format`.
+
+Generate scenario A (telemetry, a replayable recording and a manifest land in `.data/`):
+
+```bash
+corepack pnpm run tracepilot sim run --scenario pool-exhaustion --seed 42 --out .data
+```
+
+Print what the scenario produces (baseline, incident, counterfactuals, pool sweep):
+
+```bash
+corepack pnpm run calibrate
+```

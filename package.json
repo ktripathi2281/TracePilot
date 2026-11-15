@@ -15,7 +15,9 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "ci": "node scripts/ci.mjs"
+    "ci": "node scripts/ci.mjs",
+    "tracepilot": "node --experimental-strip-types --disable-warning=ExperimentalWarning packages/cli/src/bin.ts",
+    "calibrate": "node --experimental-strip-types --disable-warning=ExperimentalWarning packages/sim/scripts/calibrate.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
