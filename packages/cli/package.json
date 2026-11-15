@@ -1,0 +1,21 @@
+{
+  "name": "@tracepilot/cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The tracepilot command line.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@tracepilot/schema": "workspace:*",
+    "@tracepilot/sim": "workspace:*",
+    "@tracepilot/store": "workspace:*",
+    "@tracepilot/analysis": "workspace:*",
+    "@tracepilot/agents": "workspace:*",
+    "@tracepilot/eval": "workspace:*"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@tracepilot/eval",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Eval harness + ground truth. Agents must never import this.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@tracepilot/schema": "workspace:*",
+    "@tracepilot/sim": "workspace:*",
+    "@tracepilot/store": "workspace:*",
+    "@tracepilot/agents": "workspace:*"
+  }
+}

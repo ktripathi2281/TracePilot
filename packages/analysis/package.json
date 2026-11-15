@@ -1,0 +1,16 @@
+{
+  "name": "@tracepilot/analysis",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pure deterministic analyzers over telemetry.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@tracepilot/schema": "workspace:*"
+  }
+}

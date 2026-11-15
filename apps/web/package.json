@@ -1,0 +1,16 @@
+{
+  "name": "@tracepilot/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Web UI (React + Vite + Tailwind, Phase 5).",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@tracepilot/schema": "workspace:*"
+  }
+}
