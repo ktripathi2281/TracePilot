@@ -170,6 +170,11 @@ export const ChangeEvent = z.strictObject({
   service: ServiceName,
   description: z.string().min(1),
   diff: z.record(z.string().min(1), z.strictObject({ from: DiffValue, to: DiffValue })),
+  /**
+   * Replayed telemetry only: diff keys this event did NOT apply because a counterfactual patch
+   * pinned the knob, with the value the knob was held at. Absent in recorded telemetry.
+   */
+  pinned: z.record(z.string().min(1), z.number()).optional(),
 });
 export type ChangeEvent = z.infer<typeof ChangeEvent>;
 

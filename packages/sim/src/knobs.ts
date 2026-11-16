@@ -4,8 +4,14 @@
 // `db.maxParallelQueries`, `<service>.workers|replicas|queueLimit|timeoutUs`,
 // `<service>.params.<name>`.
 
-import { isRevertPatch, type Patch } from '@tracepilot/schema';
-import { DB_SERVICE, assertValidConfig, type SimConfig, type SystemModel } from './model.ts';
+import { isRevertPatch, isVariantPatch, type Patch, type VariantPatch } from '@tracepilot/schema';
+import {
+  DB_SERVICE,
+  assertValidConfig,
+  type SimConfig,
+  type Step,
+  type SystemModel,
+} from './model.ts';
 
 const SERVICE_KNOBS = ['workers', 'replicas', 'queueLimit', 'timeoutUs'] as const;
 type ServiceKnobKey = (typeof SERVICE_KNOBS)[number];
@@ -20,6 +26,39 @@ const NOT_MODELED: Readonly<Record<string, string>> = {
 };
 
 export class UnsupportedKnobError extends Error {}
+
+const holdsAcrossCalls = (steps: readonly Step[]): boolean =>
+  steps.some((s) => s.kind !== 'query' && s.kind !== 'compute' && s.kind !== 'transaction');
+
+/**
+ * `release-connection-before-calls`: every transaction of the service that keeps its connection
+ * while it runs non-DB steps (calls, parallel branches, fan-out) releases it around them instead.
+ * Returns the number of transactions changed.
+ */
+function applyVariant(model: SystemModel, patch: VariantPatch): number {
+  const svc = model.services[patch.service];
+  if (svc === undefined)
+    throw new UnsupportedKnobError(
+      `variant ${patch.variant}: no service "${patch.service}" in this model`,
+    );
+  let changed = 0;
+  const visit = (steps: Step[]): void => {
+    for (const s of steps) {
+      if (s.kind === 'transaction' && holdsAcrossCalls(s.steps)) {
+        s.release = 'around-calls';
+        changed++;
+      }
+      if (s.kind === 'parallel') s.branches.forEach(visit);
+      else if (s.kind === 'fanout' || s.kind === 'transaction') visit(s.steps);
+    }
+  };
+  for (const op of Object.values(svc.operations)) visit(op.steps);
+  if (changed === 0)
+    throw new UnsupportedKnobError(
+      `variant ${patch.variant}: ${patch.service} has no transaction that holds its connection across other steps`,
+    );
+  return changed;
+}
 
 export function getKnob(model: SystemModel, target: string): number | undefined {
   const dot = target.indexOf('.');
@@ -76,6 +115,7 @@ export function setKnob(model: SystemModel, target: string, value: number): bool
  *   change events no longer alter that knob (the rest of such an event still applies). So
  *   `checkout.workers=20` means "workers stay 20 even though the deploy raised them".
  * - `{revert: id}` removes that scheduled change event entirely, as if it never happened.
+ * - `{variant, service}` changes how the service works (a structural model variant).
  *
  * `from` on a set-patch is informational and not checked: it usually names the post-change value.
  */
@@ -83,6 +123,10 @@ export function applyPatches(config: SimConfig, patches: readonly Patch[]): SimC
   const next = structuredClone(config);
   const pins = new Set(next.pins);
   for (const patch of patches) {
+    if (isVariantPatch(patch)) {
+      applyVariant(next.model, patch);
+      continue;
+    }
     if (isRevertPatch(patch)) {
       const before = next.changes.length;
       next.changes = next.changes.filter((c) => c.id !== patch.revert);

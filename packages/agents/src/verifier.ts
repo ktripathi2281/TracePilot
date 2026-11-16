@@ -20,6 +20,7 @@ import {
   METRIC_UNITS,
   Patch,
   isRevertPatch,
+  isVariantPatch,
   type FactEntry,
   type Hypothesis,
   type LedgerEntry,
@@ -548,6 +549,15 @@ export function verifyDraft(draft: DiagnosisDraft, c: DraftContext): VerifierIss
             'missing_evidence',
             at,
             `patch reverts ${r.patch.revert}, which is not a change event in the store`,
+          ),
+        );
+    } else if (isVariantPatch(r.patch)) {
+      if (!c.store.getIncident(c.incidentId).services.includes(r.patch.service))
+        issues.push(
+          issue(
+            'unsupported_logic',
+            at,
+            `patch changes "${r.patch.service}", which is not a service in this incident's telemetry`,
           ),
         );
     } else if (r.patch.from !== undefined) {

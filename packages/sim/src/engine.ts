@@ -30,7 +30,7 @@ import {
   type Span,
   type SpanStatus,
 } from '@tracepilot/schema';
-import { setKnob } from './knobs.ts';
+import { getKnob, setKnob } from './knobs.ts';
 import {
   DB_SERVICE,
   assertValidConfig,
@@ -758,6 +758,89 @@ class Simulation {
     });
   }
 
+  /**
+   * Model variant of a transaction that does not hold its connection across downstream work.
+   * Steps are split into segments: runs of DB work (queries, compute, nested transactions) hold
+   * one connection each; every other step runs with no connection held. Child paths are those of
+   * the plain transaction, so every random draw is the same as in the recorded model. Segment k
+   * > 0 has its own acquire and db.transaction span under `<path>#k`.
+   */
+  private execReleasingTransaction(
+    env: Env,
+    steps: readonly Step[],
+    label: string,
+    path: string,
+    done: Done,
+  ): void {
+    const isDbWork = (s: Step): boolean =>
+      s.kind === 'query' || s.kind === 'compute' || s.kind === 'transaction';
+    const segments: { db: boolean; steps: Step[] }[] = [];
+    for (const s of steps) {
+      const last = segments.at(-1);
+      if (last !== undefined && last.db === isDbWork(s)) last.steps.push(s);
+      else segments.push({ db: isDbWork(s), steps: [s] });
+    }
+    let dbSegment = 0;
+    const runSegment = (i: number): void => {
+      const seg = segments[i];
+      if (seg === undefined) {
+        done('ok');
+        return;
+      }
+      const next = (status: Status): void => {
+        if (status === 'ok') runSegment(i + 1);
+        else done(status);
+      };
+      if (!seg.db) {
+        const free: Env = { ...env, holdsConn: false };
+        this.runSteps(free, seg.steps, path, next);
+        return;
+      }
+      const k = dbSegment++;
+      const segPath = k === 0 ? path : `${path}#${String(k)}`;
+      this.acquire(env, childPath(segPath, 'acquire'), label, (acquired) => {
+        if (acquired !== 'ok') {
+          done(acquired);
+          return;
+        }
+        const heldSince = this.now;
+        const txEnv: Env = {
+          req: env.req,
+          svc: env.svc,
+          scope: env.scope,
+          holdsConn: true,
+          parentSpanId: env.req.sampled ? spanIdFor(this.seed, env.req.id, segPath) : null,
+        };
+        this.runSteps(txEnv, seg.steps, path, (status) => {
+          this.releaseConn(heldSince);
+          if (env.req.sampled) {
+            this.emitSpan(
+              env.req,
+              segPath,
+              env.parentSpanId,
+              env.svc.name,
+              SPAN_NAMES.dbTransaction,
+              heldSince,
+              status === 'ok' ? 'ok' : 'error',
+              {
+                [SPAN_ATTRS.dbStatement]: label,
+                outcome: status === 'ok' ? 'commit' : 'rollback',
+                segment: k,
+              },
+            );
+          }
+          next(status);
+        });
+      });
+    };
+    runSegment(0);
+  }
+
+  /** Runs `steps` in order as children of `path` (each under its own label). */
+  private runSteps(env: Env, steps: readonly Step[], path: string, done: Done): void {
+    this.execSteps(env, steps, 0, path, done);
+  }
+
   private execStep(env: Env, step: Step, path: string, done: Done): void {
     switch (step.kind) {
       case 'compute': {
@@ -806,6 +889,8 @@ class Simulation {
       case 'transaction':
         if (env.holdsConn)
           this.execSteps(env, step.steps, 0, path, done); // joins the outer one
+        else if (step.release === 'around-calls')
+          this.execReleasingTransaction(env, step.steps, step.label, path, done);
         else this.execTransaction(env, step.steps, step.label, path, done);
         return;
     }
@@ -962,10 +1047,23 @@ class Simulation {
   // ---- Scheduled changes --------------------------------------------------------------------
 
   private applyChange(ev: ChangeEvent): void {
-    this.changeEvents.push(ev);
+    // Knobs a counterfactual patch pinned keep their value; the event records that it did not
+    // apply them, so replayed telemetry never shows a diff that did not happen.
+    const pinned: Record<string, number> = {};
+    for (const [key, d] of Object.entries(ev.diff)) {
+      const target = `${ev.service}.${key}`;
+      if (!this.pins.has(target) || typeof d.to !== 'number') continue;
+      const held = getKnob(this.model, target);
+      if (held !== undefined) pinned[key] = held;
+    }
+    const pinnedKeys = Object.keys(pinned);
+    this.changeEvents.push(pinnedKeys.length === 0 ? ev : { ...ev, pinned });
     const fields: Record<string, AttributeValue> = { changeId: ev.id };
     for (const [key, d] of Object.entries(ev.diff)) {
-      fields[key] = `${String(d.from)} -> ${String(d.to)}`;
+      fields[key] =
+        pinned[key] === undefined
+          ? `${String(d.from)} -> ${String(d.to)}`
+          : `pinned at ${String(pinned[key])} (not applied: ${String(d.from)} -> ${String(d.to)})`;
     }
     this.log(ev.service, 'info', `${ev.kind} applied: ${ev.description}`, fields);
     for (const [key, d] of Object.entries(ev.diff)) {

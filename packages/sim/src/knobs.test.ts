@@ -70,6 +70,38 @@ describe('applyPatches', () => {
   });
 });
 
+describe('model variants', () => {
+  const config = poolExhaustionConfig();
+  const tx = (c: typeof config) => {
+    const steps = c.model.services['checkout']?.operations['place-order']?.steps ?? [];
+    return steps.find((s) => s.kind === 'transaction');
+  };
+
+  it('release-connection-before-calls marks the transactions that hold a connection across calls', () => {
+    const next = applyPatches(config, [
+      { variant: 'release-connection-before-calls', service: 'checkout' },
+    ]);
+    expect(tx(next)).toMatchObject({
+      kind: 'transaction',
+      label: 'order-tx',
+      release: 'around-calls',
+    });
+    expect(tx(config)).not.toHaveProperty('release');
+    // A structural variant pins no knob.
+    expect(next.pins).toEqual([]);
+    expect(SimConfig.parse(JSON.parse(JSON.stringify(next)))).toEqual(next);
+  });
+
+  it('is refused where it does not apply', () => {
+    expect(() =>
+      applyPatches(config, [{ variant: 'release-connection-before-calls', service: 'payment' }]),
+    ).toThrow(UnsupportedKnobError);
+    expect(() =>
+      applyPatches(config, [{ variant: 'release-connection-before-calls', service: 'billing' }]),
+    ).toThrow(/no service "billing"/);
+  });
+});
+
 describe('config validation', () => {
   it('accepts scenario A and round-trips through JSON', () => {
     const rec = recordPoolExhaustion(1, { durationUs: 10_000_000 });

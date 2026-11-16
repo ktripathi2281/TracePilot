@@ -2,12 +2,13 @@
 
 AI-native incident investigation + deterministic counterfactual replay for distributed backends.
 
-> **Status: Phase 3 (agent layer), Gate 3 not yet verified.** The simulator, the
-> `pool-exhaustion` scenario, the telemetry store, the analysis library and the investigation
-> engine (`tracepilot investigate`) exist. On scenario A the analyzers find the root-cause signals
-> without any LLM (Gate 2). The investigation engine is tested with a scripted stand-in for the
-> model; **it has not yet been run against a real model**, which is what Gate 3 requires (see
-> NOTES.md, Phase 3, for how to record that run). Replay does not exist yet.
+> **Status: Phase 4 (counterfactual replay); Gate 3 still not verified.** The simulator, the
+> `pool-exhaustion` scenario, the telemetry store, the analysis library, the investigation
+> engine (`tracepilot investigate`) and counterfactual replay (`tracepilot replay`, `sweep`)
+> exist. On scenario A the analyzers find the root-cause signals without any LLM (Gate 2), and
+> replaying the recommended patches resolves the simulated incident (Gate 4). The investigation
+> engine is tested with a scripted stand-in for the model; **it has not yet been run against a
+> real model**, which is what Gate 3 requires (see NOTES.md, Phase 3, for how to record that run).
 > See [TRACEPILOT_BUILD_BRIEF.md](TRACEPILOT_BUILD_BRIEF.md) for the plan and [NOTES.md](NOTES.md)
 > for the decision log.
 
@@ -67,6 +68,31 @@ The diagnosis is printed with the ledger entries it cites, and the full record i
 `.data/investigations/`. `TRACEPILOT_LLM=record` also saves the model's responses to a cassette;
 `TRACEPILOT_LLM=replay` re-runs the investigation from that cassette without the API and labels
 the result as a recorded run. Other settings are listed in [.env.example](.env.example).
+
+Replay the incident with a change, through the same simulator and the same recorded workload.
+Every number in the comparison is simulator output, and every result says it is simulated from a
+model of the system, not a guarantee of production behavior:
+
+```bash
+corepack pnpm run tracepilot replay --incident in_rm6f1z3tf --out .data --patch db.pool.capacity=64
+```
+
+```bash
+corepack pnpm run tracepilot replay --incident in_rm6f1z3tf --out .data --revert ev_2
+```
+
+Replay every recommendation of a saved diagnosis, and see which treat the cause and which the
+symptom:
+
+```bash
+corepack pnpm run tracepilot replay --incident in_rm6f1z3tf --out .data --diagnosis .data/investigations/in_rm6f1z3tf.json
+```
+
+Sweep one knob over a range to find the knee and where the bottleneck moves:
+
+```bash
+corepack pnpm run tracepilot sweep --incident in_rm6f1z3tf --out .data --param db.pool.capacity --range 20:120:10
+```
 
 The native SQLite driver (`better-sqlite3`) may compile during install; that needs a C++
 toolchain where no prebuilt binary exists.

@@ -19,6 +19,7 @@ import {
   metricEvidenceId,
   parseMetricEvidenceId,
   parsePatchArg,
+  parseVariantArg,
   spanEvidenceId,
 } from './index.ts';
 
@@ -360,6 +361,17 @@ describe('patches', () => {
       'db.pool.capacity: 30 → 64',
     );
     expect(formatPatch({ revert: 'ev_1' })).toBe('revert ev_1');
+  });
+
+  it('accepts model variants, in the patch and in the CLI form', () => {
+    const v = { variant: 'release-connection-before-calls', service: 'checkout' };
+    expect(Patch.parse(v)).toEqual(v);
+    expect(parseVariantArg('release-connection-before-calls:checkout')).toEqual(v);
+    expect(formatPatch(Patch.parse(v))).toBe('release-connection-before-calls:checkout');
+    expect(Patch.safeParse({ variant: 'make-it-fast', service: 'checkout' }).success).toBe(false);
+    expect(Patch.safeParse({ ...v, service: 'Checkout!' }).success).toBe(false);
+    expect(() => parseVariantArg('release-connection-before-calls')).toThrow(/<variant>:<service>/);
+    expect(() => parseVariantArg('make-it-fast:checkout')).toThrow();
   });
 });
 

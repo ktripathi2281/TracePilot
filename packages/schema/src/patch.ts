@@ -50,11 +50,42 @@ export const RevertPatch = z.strictObject({
 });
 export type RevertPatch = z.infer<typeof RevertPatch>;
 
-export const Patch = z.union([SetPatch, RevertPatch]);
+/**
+ * Structural model variants: changes to how a service works, not to a knob's value. Each one is a
+ * code change in reality, so replaying it answers "what if we fixed it", not "what if we turned
+ * a dial".
+ */
+export const MODEL_VARIANTS = ['release-connection-before-calls'] as const;
+export type ModelVariant = (typeof MODEL_VARIANTS)[number];
+
+/** e.g. `{ variant: "release-connection-before-calls", service: "checkout" }`. */
+export const VariantPatch = z.strictObject({
+  variant: z.enum(MODEL_VARIANTS),
+  service: z.string().regex(new RegExp(`^${SERVICE}$`), 'invalid service name'),
+});
+export type VariantPatch = z.infer<typeof VariantPatch>;
+
+export const Patch = z.union([SetPatch, RevertPatch, VariantPatch]);
 export type Patch = z.infer<typeof Patch>;
 
 export function isRevertPatch(p: Patch): p is RevertPatch {
   return 'revert' in p;
+}
+
+export function isVariantPatch(p: Patch): p is VariantPatch {
+  return 'variant' in p;
+}
+
+export function isSetPatch(p: Patch): p is SetPatch {
+  return 'target' in p;
+}
+
+/** Parses the CLI form `<variant>:<service>` (e.g. `release-connection-before-calls:checkout`). */
+export function parseVariantArg(arg: string): VariantPatch {
+  const colon = arg.lastIndexOf(':');
+  if (colon <= 0 || colon === arg.length - 1)
+    throw new Error(`variant must look like <variant>:<service>, got "${arg}"`);
+  return VariantPatch.parse({ variant: arg.slice(0, colon), service: arg.slice(colon + 1) });
 }
 
 /**
@@ -76,6 +107,7 @@ export function parsePatchArg(arg: string): SetPatch {
 
 export function formatPatch(p: Patch): string {
   if (isRevertPatch(p)) return `revert ${p.revert}`;
+  if (isVariantPatch(p)) return `${p.variant}:${p.service}`;
   return p.from === undefined
     ? `${p.target}=${String(p.to)}`
     : `${p.target}: ${String(p.from)} → ${String(p.to)}`;

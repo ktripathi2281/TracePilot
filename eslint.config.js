@@ -24,9 +24,18 @@ const NO_EVAL = [
 /** No access to the simulator at all: data must come through the store. */
 const NO_SIM = [
   {
-    group: ['@tracepilot/sim', '@tracepilot/sim/*', '**/sim', '**/sim/**'],
+    group: [
+      '@tracepilot/sim',
+      '@tracepilot/sim/*',
+      '**/sim',
+      '**/sim/**',
+      '@tracepilot/replay',
+      '@tracepilot/replay/*',
+      '**/replay/src',
+      '**/replay/src/**',
+    ],
     message:
-      'This package must not import the simulator. Read telemetry through @tracepilot/store (brief §1, §6).',
+      'This package must not import the simulator or replay (which carries the simulator recording). Read telemetry through @tracepilot/store (brief §1, §6).',
   },
 ];
 
@@ -136,6 +145,11 @@ export default tseslint.config(
     files: ['eval/**', 'packages/cli/**'],
     rules: restrictImports({ patterns: NO_SIM_INTERNALS }),
   },
+  // replay: the sim public API (it runs the simulator), never eval ground truth.
+  {
+    files: ['packages/replay/**'],
+    rules: restrictImports({ patterns: [...NO_EVAL, ...NO_SIM_INTERNALS] }),
+  },
   // agents, schema: no sim, no eval.
   {
     files: ['packages/agents/**', 'packages/schema/**'],
@@ -164,7 +178,7 @@ export default tseslint.config(
 
   // ---- Determinism ----------------------------------------------------------------------
   {
-    files: ['packages/sim/**', 'packages/analysis/**'],
+    files: ['packages/sim/**', 'packages/analysis/**', 'packages/replay/**'],
     rules: {
       'no-restricted-properties': [
         'error',

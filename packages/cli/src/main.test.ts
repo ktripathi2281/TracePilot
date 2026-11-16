@@ -127,7 +127,7 @@ describe('tracepilot argument handling', () => {
 
   it('says which phase brings the commands that do not exist yet', async () => {
     const c = capture();
-    expect(await main(['replay', '--incident', 'x'], c.io)).toBe(2);
-    expect(c.err.join('\n')).toMatch(/not implemented yet \(Phase 4\)/);
+    expect(await main(['eval', '--scenario', 'pool-exhaustion'], c.io)).toBe(2);
+    expect(c.err.join('\n')).toMatch(/not implemented yet \(Phase 6\)/);
   });
 });

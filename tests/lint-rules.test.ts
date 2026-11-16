@@ -29,6 +29,12 @@ describe('information boundary', () => {
     ['packages/analysis/src/x.ts', "import { a } from 'better-sqlite3';"],
     ['packages/store/src/x.ts', "import { a } from 'node:fs';"],
     ['packages/store/src/x.ts', "import { a } from 'fs/promises';"],
+    ['packages/agents/src/x.ts', "import { a } from '@tracepilot/replay';"],
+    ['packages/store/src/x.ts', "import { a } from '@tracepilot/replay';"],
+    ['packages/analysis/src/x.ts', "import { a } from '@tracepilot/replay';"],
+    ['apps/web/src/x.ts', "import { a } from '@tracepilot/replay';"],
+    ['packages/replay/src/x.ts', "import { a } from '@tracepilot/eval';"],
+    ['packages/replay/src/x.ts', "import { a } from '../../sim/src/engine.ts';"],
   ];
   it.each(forbidden)('%s rejects: %s', async (file, code) => {
     expect(await ruleIds(`${code}\nexport const b = a;\n`, file)).toContain(
@@ -47,6 +53,10 @@ describe('information boundary', () => {
     ['packages/store/src/x.ts', "import { a } from 'better-sqlite3';"],
     ['packages/store/src/x.test.ts', "import { a } from 'node:fs';"],
     ['packages/analysis/src/x.ts', "import { a } from '@tracepilot/schema';"],
+    ['packages/replay/src/x.ts', "import { a } from '@tracepilot/sim';"],
+    ['packages/replay/src/x.ts', "import { a } from '@tracepilot/analysis';"],
+    ['packages/cli/src/x.ts', "import { a } from '@tracepilot/replay';"],
+    ['apps/server/src/x.ts', "import { a } from '@tracepilot/replay';"],
   ];
   it.each(allowed)('%s allows: %s', async (file, code) => {
     expect(await ruleIds(`${code}\nexport const b = a;\n`, file)).not.toContain(

@@ -88,6 +88,13 @@ export interface TransactionStep {
   kind: 'transaction';
   label: string;
   steps: Step[];
+  /**
+   * Counterfactual model variant (never in a recorded model): `around-calls` releases the
+   * connection before every step that is not DB work (calls, parallel, fan-out, external) and
+   * acquires a fresh one for the DB work after it. The transaction is no longer atomic; that is
+   * the price of the variant and the replay says so.
+   */
+  release?: 'around-calls' | undefined;
 }
 export type Step =
   ComputeStep | QueryStep | ExternalStep | CallStep | ParallelStep | FanoutStep | TransactionStep;
@@ -125,6 +132,7 @@ export const Step: z.ZodType<Step> = z.lazy(() =>
       kind: z.literal('transaction'),
       label: StepLabel,
       steps: z.array(Step).min(1),
+      release: z.literal('around-calls').optional(),
     }),
   ]),
 );

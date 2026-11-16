@@ -65,6 +65,9 @@ importers:
       '@tracepilot/analysis':
         specifier: workspace:*
         version: link:../packages/analysis
+      '@tracepilot/replay':
+        specifier: workspace:*
+        version: link:../packages/replay
       '@tracepilot/schema':
         specifier: workspace:*
         version: link:../packages/schema
@@ -113,6 +116,9 @@ importers:
       '@tracepilot/eval':
         specifier: workspace:*
         version: link:../../eval
+      '@tracepilot/replay':
+        specifier: workspace:*
+        version: link:../replay
       '@tracepilot/schema':
         specifier: workspace:*
         version: link:../schema
@@ -122,6 +128,21 @@ importers:
       '@tracepilot/store':
         specifier: workspace:*
         version: link:../store
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+
+  packages/replay:
+    dependencies:
+      '@tracepilot/analysis':
+        specifier: workspace:*
+        version: link:../analysis
+      '@tracepilot/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@tracepilot/sim':
+        specifier: workspace:*
+        version: link:../sim
       zod:
         specifier: 4.6.7
         version: 4.6.7

@@ -330,10 +330,18 @@ describe('scheduled changes, pins and disturbances', () => {
     expect(r.telemetry.logs.some((l) => l.message === 'config applied: more workers')).toBe(true);
   });
 
-  it('does not apply a pinned knob but still records the event', () => {
+  it('does not apply a pinned knob, and the recorded event says so', () => {
     const r = runMicro({ services: { api }, changes: [change], pins: ['api.workers'] }, [0, 10]);
     expect(ends(r)[1]).toEqual([200, 'ok']);
-    expect(r.telemetry.changeEvents).toEqual([change]);
+    // The diff is kept as it was recorded; `pinned` names the key that did not apply and the
+    // value the knob stayed at. Informational keys (note) are never pinned.
+    expect(r.telemetry.changeEvents).toEqual([{ ...change, pinned: { workers: 1 } }]);
+    const log = r.telemetry.logs.find((l) => l.message === 'config applied: more workers');
+    expect(log?.fields).toMatchObject({
+      workers: 'pinned at 1 (not applied: 1 -> 2)',
+      note: 'a -> b',
+    });
+    expect(findTelemetryProblems(r.telemetry)).toEqual([]);
   });
 
   it('scales a step only inside the disturbance window', () => {

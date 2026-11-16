@@ -662,3 +662,136 @@ Three fixes before Phase 4, in their own commit.
 3. **`tracepilot investigate` exits 2 when a diagnosis is published with unresolved verifier
    issues**, and says on stderr that it is not verified. Exit 2 therefore means "bad input" or
    "not verified"; the message tells which.
+
+## Phase 4 — Counterfactual replay, sweep, CLI (2026-11-16)
+
+### What exists
+
+- `packages/replay` (new package): `Replayer` runs an incident's recording through the same
+  simulator with patches and compares it with the original; `sweep` runs a range of one knob;
+  `replayRecommendations` replays each recommendation of a diagnosis and compares them;
+  `readRecommendations` reads them from a saved investigation. The simulator-side recording file
+  (`<out>/sim/<id>.json`) moved here from the CLI.
+- `tracepilot replay --incident <id> [--patch t=n]... [--revert ev]... [--variant v:svc]...`,
+  `tracepilot replay --incident <id> --diagnosis <investigation.json> [--recommendation rc_n]...`
+  and `tracepilot sweep --incident <id> --param <target> --range a:b:step`. Results go to
+  `<out>/replays/`. `--json` prints the result instead.
+- Simulator: change events in replayed telemetry carry `pinned` (diff keys a patch held fixed,
+  with the value kept), and the deploy log line says so. A structural model variant,
+  `release-connection-before-calls` (the stretch item), is implemented in the engine.
+- Tests: Gate 4 on scenario A (21), CLI replay and sweep (11), replay unit tests (5), schema and
+  knob tests for the variant (3), engine test for the pin annotation, lint-rule cases for the
+  new package (10).
+- Checks at commit time: format ✔, lint ✔, typecheck ✔, tests ✔ (429 passed, 7 skipped: the Gate 3
+  replay tests, still waiting for a recorded run).
+
+### Gate 4 status: passes
+
+All numbers are simulator output for scenario A, seed 42, printed by the CLI. Requests are those
+that finished in the incident window (T+10:00 – T+15:00, inferred from the recorded telemetry).
+
+| Replay                                     | Verdict  | Failed | Error rate | p99     | New pressure (saturation analyzer)        |
+| ------------------------------------------ | -------- | ------ | ---------- | ------- | ----------------------------------------- |
+| original                                   |          | 24726  | 69.2 %     | 16.03 s | db.pool, checkout.workers                 |
+| `revert ev_2` (rc_1, cause)                | resolves | 0      | 0.0 %      | 129 ms  | none                                      |
+| `db.pool.capacity=64` (rc_2, symptom)      | resolves | 0      | 0.0 %      | 356 ms  | db.executor (91.5 % busy, queue mean 8.4) |
+| `release-connection-before-calls:checkout` | resolves | 0      | 0.0 %      | 412 ms  | db.executor                               |
+| `checkout.workers=20`                      | improves | 4912   | 13.7 %     | 1.01 s  | none                                      |
+| `db.acquireTimeoutUs=15000000`             | worsens  | 30267  | 85.0 %     | 20.00 s |                                           |
+
+The tests assert the qualitative outcomes (verdict and direction), not these exact figures.
+
+- **The recommended patch improves the metrics:** both recommendations of the scripted
+  diagnosis stop every failure. The cause patch does it with no new bottleneck and a lower p99;
+  the symptom patch moves the pressure to the DB executor (2370 s of DB queue wait vs none). The
+  comparison says so in a finding built from the numbers.
+- **Identity replay is exact:** every `Replayer` first replays the recording without patches
+  and refuses to report anything unless the telemetry hash equals the recorded one. A patch that
+  sets a knob to its recorded value (`db.pool.capacity=30`) gives the identical hash.
+- **The sweep shows a sensible knee** (`db.pool.capacity` 20…120 step 10):
+
+  | pool | errors | p99     | DB queue wait | under pressure                         |
+  | ---- | ------ | ------- | ------------- | -------------------------------------- |
+  | 20   | 70.2 % | 10.46 s | 0             | checkout.workers, db.pool              |
+  | 30   | 69.2 % | 16.03 s | 0             | checkout.workers, db.pool              |
+  | 40   | 55.6 % | 15.96 s | 154 s         | checkout.workers, db.executor, db.pool |
+  | 50   | 33.1 % | 13.66 s | 770 s         | checkout.workers, db.executor, db.pool |
+  | 60   | 0.0 %  | 351 ms  | 2234 s        | db.executor                            |
+  | 80   | 0.0 %  | 374 ms  | 2695 s        | db.executor                            |
+  | 120  | 0.0 %  | 407 ms  | 2957 s        | db.executor                            |
+
+  Knee and "resolves from" at 60; the DB executor comes under pressure from 40. Past the knee a
+  larger pool buys nothing and p99 creeps up as the executor queues: the brief's "very large
+  pool moves the bottleneck to the DB executor".
+
+### Decisions (and deviations)
+
+1. **A new package, `packages/replay`.** The brief's layout has no home for replay: it needs
+   the simulator (so not analysis, store or agents) and the saturation analyzer (so not sim, to
+   keep the simulator free of analysis code). The server (Phase 5) can use it. Lint: agents,
+   store, analysis and web may not import it (it carries the recording); it may not import eval.
+2. **Every number is simulator output.** Headline figures come from request outcomes and the
+   simulator's counters of the two runs; side effects from the Phase 2 saturation analyzer run on
+   each run's telemetry. The telemetry store is not read for any number (only to check that it
+   holds the same telemetry as the recording). A test recomputes the figures from a direct
+   simulator run.
+3. **Comparison windows are inferred from the recorded telemetry** with the Phase 2 window
+   inference, not taken from the scenario definition, and are the same for both runs.
+4. **The symptom** (for "time degraded" and the verdict) is a 5 s bucket where entry requests
+   fail above max(1 %, baseline + 1 point) or p99 exceeds max(1 s, 5 × baseline p99), or nothing
+   finishes. Thresholds come from the original run's baseline and are applied unchanged to the
+   replay.
+5. **Verdict rubric:** `resolves` = at most 2 degraded buckets (the moment of the change) and
+   errors under the threshold; `worsens` = more failures or degraded time, or a worse p99
+   without fewer failures; `improves` = fewer failures or less degraded time and p99 not worse;
+   `no_change` = every headline delta within 1 %; else `mixed`. The 2-bucket allowance was added
+   after pool 64 showed one 5 s degraded bucket right at the deploy.
+6. **Side effects:** a resource the analyzer finds saturated or busy in the replay but not in the
+   original is a `new_bottleneck`; the reverse is `relieved`; a queue that appears where there
+   was none is `queue_formed`; a service with more errors is `more_errors`.
+7. **Pinned knobs:** `ChangeEvent.pinned` (optional) lists the diff keys a patch held fixed and
+   the value kept. Absent in recorded telemetry, so identity hashes are unchanged. The recorded
+   diff is kept as it was.
+8. **Diagnosis files:** `replay --diagnosis` reads the saved investigation, checks that it is
+   for the same incident, and replays each recommendation on its own (or the ones named with
+   `--recommendation`). A diagnosis with unresolved verifier issues is replayed with a note.
+9. **The notice** ("Simulated from a model of the system. Not a guarantee of production
+   behavior.") is a field of every ReplayRun, comparison and Sweep, and the CLI prints it first
+   and last.
+10. **Results are saved as JSON summaries** (`<out>/replays/rp_<hash>.json`), not as telemetry.
+    Replayed telemetry is never ingested into the store, where it would look like a new incident
+    to the investigator. The summaries keep the chart series (11 metrics per service).
+11. **Model variant (stretch): `release-connection-before-calls`.** A new patch form
+    `{ variant, service }`. The engine runs a marked transaction as segments: DB work holds a
+    connection, every other step (calls, parallel branches, fan-out) runs with none held, and
+    the DB work after it acquires a fresh connection. Child step paths are those of the plain
+    transaction, so every random draw is identical (tested). On scenario A it resolves the
+    incident with the deploy in place, and the hold-and-wait analyzer no longer detects
+    hold-and-wait in the replayed telemetry. The transaction is no longer atomic; the replay
+    models the timing, not the correctness, of that change.
+12. **The investigator prompt (v2) lists the variant** as a patch form, so a model can propose
+    the structural fix as a replayable patch. Listing it hints at what the replay engine can
+    model; it is in the tool schema anyway. Any recorded Phase 3 cassette is invalidated by this
+    prompt change (none exists yet).
+
+### Assumptions
+
+- The recording on disk and the simulator are the same versions that produced the stored
+  telemetry; identity replay checks it.
+- Requests are compared by when they FINISHED, so a replay that makes requests slower shifts
+  some of them out of the window.
+
+### Known gaps
+
+- **Only simulated incidents can be replayed** (they need the recording). Real telemetry would
+  need a fitted model.
+- **Replay speed:** about 1.2 s per run plus the identity run; the 11-point sweep takes ~14 s.
+  Runs are sequential.
+- **Latency p50 can look worse after a fix** (1.8 ms → 105 ms with pool 64) because, in the
+  original, most requests failed fast. The table reports it as measured; p99, failures and
+  goodput are the meaningful figures.
+- **Sweep knee** is a fixed rule (error rate within 0.5 points of the best, p99 within 10 % of
+  the best); it is not a fitted curve.
+- **The verdict thresholds** (1 %, 1 s, 5 × baseline p99, 2 buckets) are fixed, not
+  configurable.
+- **No LLM narration** of replay results yet (the brief allows it with returned numbers only).

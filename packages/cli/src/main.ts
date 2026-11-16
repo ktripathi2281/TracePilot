@@ -8,11 +8,11 @@
 //                           workload) needed to replay. Read only by the simulator side (replay,
 //                           eval). The store has no API that reads it.
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { SIM_DIR, simRecordingPath, type SimRecordingFile } from '@tracepilot/replay';
 import {
-  Recording,
   SCENARIOS,
   findTelemetryProblems,
   hashTelemetry,
@@ -20,8 +20,10 @@ import {
   runSimulation,
 } from '@tracepilot/sim';
 import { TelemetryStore } from '@tracepilot/store';
-import { z } from 'zod';
 import { investigateCommand, type InvestigateDeps } from './investigate.ts';
+import { replayCommand, sweepCommand } from './replay.ts';
+
+export { SIM_DIR, SimRecordingFile, readSimRecording, simRecordingPath } from '@tracepilot/replay';
 
 export interface Io {
   out: (line: string) => void;
@@ -41,38 +43,24 @@ Environment for investigate:
 
 Scenarios: ${Object.keys(SCENARIOS).join(', ')}
 
+  replay --incident <id> [--patch <target>=<n>]... [--revert <changeEventId>]...
+         [--variant <variant>:<service>]... [--out <dir>] [--json]
+                                                         replay the incident with patches
+  replay --incident <id> --diagnosis <investigation.json> [--recommendation <id>]...
+                                                         replay each recommendation of a diagnosis
+  sweep --incident <id> --param <target> --range <from>:<to>:<step> [--patch ...]
+                                                         replay a range of values of one knob
+
+  Replay results are simulated from a model of the system, not a guarantee of production behavior.
+
 Not implemented yet:
-  replay / sweep (Phase 4), eval (Phase 6)`;
+  eval (Phase 6)`;
 
 const LATER: Readonly<Record<string, string>> = {
-  replay: 'Phase 4',
-  sweep: 'Phase 4',
   eval: 'Phase 6',
 };
 
 export const STORE_FILE = 'telemetry.db';
-export const SIM_DIR = 'sim';
-
-/** The private, simulator-side record of a simulated incident. */
-export const SimRecordingFile = z.strictObject({
-  formatVersion: z.literal(1),
-  incidentId: z.string(),
-  scenario: z.string(),
-  seed: z.number().int().nonnegative(),
-  /** Must equal the store's telemetry hash for the incident; replays are checked against it. */
-  telemetryHash: z.string(),
-  recording: Recording,
-});
-export type SimRecordingFile = z.infer<typeof SimRecordingFile>;
-
-export const simRecordingPath = (outDir: string, incidentId: string): string =>
-  join(outDir, SIM_DIR, `${incidentId}.json`);
-
-export function readSimRecording(outDir: string, incidentId: string): SimRecordingFile {
-  return SimRecordingFile.parse(
-    JSON.parse(readFileSync(simRecordingPath(outDir, incidentId), 'utf8')),
-  );
-}
 
 function simRun(args: string[], io: Io): number {
   const { values } = parseArgs({
@@ -153,6 +141,8 @@ export async function main(argv: string[], io: Io, deps: InvestigateDeps = {}): 
   }
   if (command === 'sim' && sub === 'run') return simRun(rest, io);
   if (command === 'investigate') return investigateCommand(argv.slice(1), io, deps);
+  if (command === 'replay') return replayCommand(argv.slice(1), io);
+  if (command === 'sweep') return sweepCommand(argv.slice(1), io);
   const later = LATER[command];
   if (later !== undefined) {
     io.err(`"${command}" is not implemented yet (${later}).`);
