@@ -1115,3 +1115,29 @@ mechanism.
 **Eval**: the scripted fixture completes on C and recommends the right fix (revert ev_2, which
 resolves), but names hold-and-wait as the mechanism: scored as a root-cause miss and an overall
 fail. The harness does not give credit for a fix found for the wrong reason.
+
+### (f) The web UI with all four scenarios
+
+- `tracepilot sim run --scenario all` simulates every scenario into one store (one incident each).
+- **Incident switcher** in the header and an incident list on the overview. Incidents keep their
+  neutral IDs: the UI never shows scenario names (they are simulator config). To tell incidents
+  apart it shows each one's own telemetry headline (p99, failed requests); `/api/incidents` now
+  returns each incident with its inferred symptom, incident window and headline.
+- **Scenario signals**: pod events get their own lane on the timeline; service charts include
+  ready pods, pod restarts, pod memory and the cache hit ratio when the service reports them; the
+  replay lab adds before/after charts for ready pods and cache hit ratio when the incident has
+  them (replay summaries now keep those series).
+- **Replay knobs**: a `<service>.memoryLimit` input (in MiB) for services that report
+  `replicas_ready`, `cache.capacity` when a cache reports its hit ratio, and the replicas knob for
+  services that run pods. Their current values are not in telemetry, so they are left blank.
+  Patch values print by unit (MiB, ms).
+- Fixes found while checking in the browser: the service graph now refits when the incident
+  changes; a flat ratio series no longer gets a 0–10000 % axis; knob inputs have accessible names;
+  the header wraps instead of overflowing.
+- `eval/src/ui-scenarios.test.ts` (7 tests) loads all four scenarios into one data directory and,
+  in a real browser: switches between the four incidents (four different headlines, no scenario
+  name anywhere in the page), finds D's pod lane and pod charts, C's cache chart, neither in A or
+  B, replays D with a 1024 MiB memory limit (resolves, ready pods chart) and C with the revert
+  (resolves). Shared helpers moved to `eval/src/ui-kit.ts`.
+- Known gap: for D the replay's p99 headline shows "worse" (27 ms → 129 ms) because in the
+  original most requests failed fast; failures and throughput are the meaningful figures.

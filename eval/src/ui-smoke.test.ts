@@ -16,9 +16,10 @@ import { REPLAY_NOTICE, simRecordingPath, type SimRecordingFile } from '@tracepi
 import { startServer, type RunningServer } from '@tracepilot/server';
 import { hashTelemetry, recordPoolExhaustion, runSimulation } from '@tracepilot/sim';
 import { TelemetryStore } from '@tracepilot/store';
-import { chromium, type Browser, type Page } from 'playwright-core';
+import type { Browser, Page } from 'playwright-core';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { launchBrowser } from './ui-kit.ts';
 
 const WEB_ROOT = fileURLToPath(new URL('../../apps/web', import.meta.url));
 const SHOTS = process.env['TRACEPILOT_SMOKE_SHOTS'];
@@ -29,25 +30,6 @@ let server: RunningServer;
 let browser: Browser;
 let page: Page;
 const pageErrors: string[] = [];
-
-/** Edge, then Chrome, or an explicit executable. Fails loudly if none starts. */
-async function launchBrowser(): Promise<Browser> {
-  const exe = process.env['TRACEPILOT_BROWSER'];
-  if (exe !== undefined && exe !== '') return chromium.launch({ executablePath: exe });
-  const problems: string[] = [];
-  for (const channel of ['msedge', 'chrome']) {
-    try {
-      return await chromium.launch({ channel });
-    } catch (e) {
-      problems.push(
-        `${channel}: ${e instanceof Error ? (e.message.split('\n')[0] ?? '') : String(e)}`,
-      );
-    }
-  }
-  throw new Error(
-    `no browser for the UI smoke test (set TRACEPILOT_BROWSER):\n${problems.join('\n')}`,
-  );
-}
 
 async function shot(name: string): Promise<void> {
   if (SHOTS === undefined || SHOTS === '') return;

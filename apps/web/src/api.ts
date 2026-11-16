@@ -3,7 +3,7 @@
 
 import type {
   Evidence,
-  Incident,
+  IncidentSummary,
   InvestigationEvent,
   InvestigationResponse,
   KnobCatalog,
@@ -49,7 +49,7 @@ const post = <T>(path: string, body: unknown): Promise<T> =>
 const inc = (id: string): string => `/api/incidents/${encodeURIComponent(id)}`;
 
 export const api = {
-  incidents: () => call<Incident[]>('/api/incidents'),
+  incidents: () => call<IncidentSummary[]>('/api/incidents'),
   overview: (id: string) => call<Overview>(`${inc(id)}/overview`),
   timeline: (id: string) => call<Timeline>(`${inc(id)}/timeline`),
   service: (id: string, service: string) =>

@@ -153,6 +153,10 @@ const SERVICE_METRICS: readonly MetricName[] = [
   'pool_in_use',
   'pool_wait_queue',
   'db_active_queries',
+  'replicas_ready',
+  'pod_restarts',
+  'memory_working_set',
+  'cache_hit_ratio',
 ];
 
 export interface TraceSummary {

@@ -25,6 +25,10 @@ export const CHART_METRICS: readonly MetricName[] = [
   'pool_wait_queue',
   'db_active_queries',
   'query_exec_p95',
+  'replicas_ready',
+  'pod_restarts',
+  'memory_working_set',
+  'cache_hit_ratio',
 ];
 
 export const RequestStats = z.strictObject({

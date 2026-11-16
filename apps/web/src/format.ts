@@ -24,8 +24,12 @@ export const fmtRate = (x: number | null | undefined): string =>
 export const fmtCount = (x: number | null | undefined): string =>
   x === null || x === undefined ? '—' : Math.round(x).toLocaleString('en-US');
 
+export const fmtBytes = (x: number | null | undefined): string =>
+  x === null || x === undefined ? '—' : `${Math.round(x / 1_048_576).toLocaleString('en-US')} MiB`;
+
 export function fmtUnit(unit: string, v: number | null | undefined): string {
   if (unit === 'us') return fmtDur(v);
+  if (unit === 'bytes') return fmtBytes(v);
   if (unit === 'ratio') return fmtPct(v);
   if (unit === 'req/s') return fmtRate(v);
   return fmtCount(v);
@@ -34,3 +38,10 @@ export function fmtUnit(unit: string, v: number | null | undefined): string {
 /** Shown with every replay result (must equal REPLAY_NOTICE in @tracepilot/replay; tested). */
 export const REPLAY_NOTICE =
   'Simulated from a model of the system. Not a guarantee of production behavior.';
+
+/** A knob value as a person reads it: memory limits in MiB, `...Us` knobs as durations. */
+export function fmtKnobValue(target: string, value: number): string {
+  if (target.endsWith('.memoryLimit')) return fmtBytes(value);
+  if (target.endsWith('Us')) return fmtDur(value);
+  return String(value);
+}

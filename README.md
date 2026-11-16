@@ -107,7 +107,7 @@ corepack pnpm install
 ```
 
 ```bash
-corepack pnpm run tracepilot sim run --scenario pool-exhaustion --seed 42 --out .data
+corepack pnpm run tracepilot sim run --scenario all --seed 42 --out .data
 ```
 
 ```bash
@@ -118,7 +118,8 @@ corepack pnpm run web:build
 corepack pnpm run tracepilot serve --out .data
 ```
 
-**0:00 – Overview** (http://127.0.0.1:4318). "Checkout is failing: p99 went from about 130 ms to
+**0:00 – Overview** (http://127.0.0.1:4318). The header switches between the four incidents
+(neutral IDs; the one with p99 16 s and about 25 thousand failures is scenario A). "Checkout is failing: p99 went from about 130 ms to
 16 s, 25 thousand requests failed, throughput fell by two thirds. The graph shows every service red
 and the database amber. There were two changes: a config change at T+6:30 and a deploy at T+10:00."
 
@@ -136,6 +137,10 @@ three new queries; the verifier passed."
 deploy resolves it: zero failures, p99 back to about 130 ms. A pool of 64 also stops the failures,
 but the side-effect check shows the DB executor becoming the new bottleneck. The sweep finds the
 knee at 60 connections. All of it is simulated from a model, as the banner says."
+
+**Afterwards, if there is time:** switch to the incident whose p99 dropped to 23 ms with about 24
+thousand failures (scenario D): its timeline has a pods lane full of OOMKills, ready pods fall to 0,
+and in the replay lab raising the checkout memory limit to 1024 MiB resolves it.
 
 **3b (with an API key):**
 

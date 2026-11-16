@@ -35,7 +35,8 @@ export interface Io {
 
 const USAGE = `tracepilot <command>
 
-  sim run --scenario <name> [--seed <n>] [--out <dir>]   simulate a scenario and ingest its telemetry
+  sim run --scenario <name|all> [--seed <n>] [--out <dir>]
+                                                         simulate a scenario (or all) and ingest its telemetry
   investigate --incident <id> [--stream] [--out <dir>]   investigate an incident and print the diagnosis
 
 Environment for investigate:
@@ -81,14 +82,24 @@ function simRun(args: string[], io: Io): number {
     return EXIT.usage;
   }
   const seed = Number(values.seed);
-  if (SCENARIOS[values.scenario] === undefined) {
+  if (values.scenario !== 'all' && SCENARIOS[values.scenario] === undefined) {
     io.err(
-      `sim run: unknown scenario "${values.scenario}". Available: ${Object.keys(SCENARIOS).join(', ')}`,
+      `sim run: unknown scenario "${values.scenario}". Available: ${Object.keys(SCENARIOS).join(', ')}, all`,
     );
     return EXIT.usage;
   }
+  // `all` simulates every scenario into the same store, one incident each.
+  const scenarios = values.scenario === 'all' ? Object.keys(SCENARIOS) : [values.scenario];
+  for (const [i, scenario] of scenarios.entries()) {
+    if (i > 0) io.out('');
+    const code = simulateOne(scenario, seed, values.out, io);
+    if (code !== 0) return code;
+  }
+  return 0;
+}
 
-  const recording = recordScenario(values.scenario, seed);
+function simulateOne(scenario: string, seed: number, out: string, io: Io): number {
+  const recording = recordScenario(scenario, seed);
   const { telemetry } = runSimulation(recording.config, recording.workload);
   // Same validation an ingestor would apply (brief §2). Never store telemetry that fails it.
   const problems = findTelemetryProblems(telemetry);
@@ -97,8 +108,8 @@ function simRun(args: string[], io: Io): number {
     return 1;
   }
 
-  mkdirSync(join(values.out, SIM_DIR), { recursive: true });
-  const storePath = join(values.out, STORE_FILE);
+  mkdirSync(join(out, SIM_DIR), { recursive: true });
+  const storePath = join(out, STORE_FILE);
   const store = new TelemetryStore(storePath);
   let result;
   try {
@@ -115,12 +126,12 @@ function simRun(args: string[], io: Io): number {
   const file: SimRecordingFile = {
     formatVersion: 1,
     incidentId: incident.id,
-    scenario: values.scenario,
+    scenario,
     seed,
     telemetryHash,
     recording,
   };
-  writeFileSync(simRecordingPath(values.out, incident.id), JSON.stringify(file));
+  writeFileSync(simRecordingPath(out, incident.id), JSON.stringify(file));
 
   const c = incident.counts;
   io.out(`incident   ${incident.id}${created ? '' : ' (already in the store)'}`);
@@ -129,7 +140,7 @@ function simRun(args: string[], io: Io): number {
   );
   io.out(`hash       ${telemetryHash}`);
   io.out(`store      ${storePath}`);
-  io.out(`recording  ${simRecordingPath(values.out, incident.id)} (simulator side only)`);
+  io.out(`recording  ${simRecordingPath(out, incident.id)} (simulator side only)`);
   return 0;
 }
 

@@ -52,7 +52,16 @@ export function Chart(props: {
       height,
       legend: { show: lines.length > 1, live: false },
       cursor: sync === undefined ? {} : { sync: { key: sync } },
-      scales: { x: { time: false } },
+      scales: {
+        x: { time: false },
+        // A flat series would get uPlot's default 0–100 range: 10000 % on a ratio axis.
+        y: {
+          range: (_u, min, max) =>
+            min === max
+              ? [Math.min(0, min), min === 0 ? 1 : Math.abs(min) * 2]
+              : [Math.min(0, min), max],
+        },
+      },
       axes: [
         {
           stroke: COLORS.axis,

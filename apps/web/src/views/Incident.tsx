@@ -172,6 +172,10 @@ const CHARTS: { metric: string; title: string; unit: string }[] = [
   { metric: 'pool_in_use', title: 'pool in use', unit: 'count' },
   { metric: 'pool_wait_queue', title: 'pool wait queue', unit: 'count' },
   { metric: 'db_active_queries', title: 'DB active queries', unit: 'count' },
+  { metric: 'replicas_ready', title: 'ready pods', unit: 'count' },
+  { metric: 'pod_restarts', title: 'pod restarts', unit: 'count' },
+  { metric: 'memory_working_set', title: 'pod memory (max)', unit: 'bytes' },
+  { metric: 'cache_hit_ratio', title: 'cache hit ratio', unit: 'ratio' },
 ];
 
 function ServicePanel(props: { incident: string; service: string }) {

@@ -1,6 +1,6 @@
 import { Background, Position, ReactFlow, type Edge, type Node } from '@xyflow/react';
 import { useMemo } from 'react';
-import type { Health, Incident, Overview } from '@tracepilot/server/api-types';
+import type { Health, IncidentSummary, Overview } from '@tracepilot/server/api-types';
 import { navigate } from '../App.tsx';
 import { api } from '../api.ts';
 import { fmtCount, fmtDur, fmtRate, fmtT } from '../format.ts';
@@ -76,19 +76,19 @@ function layout(o: Overview): { nodes: Node[]; edges: Edge[] } {
   return { nodes, edges };
 }
 
-export function OverviewView(props: { incident: string; incidents: Incident[] }) {
+export function OverviewView(props: { incident: string; incidents: IncidentSummary[] }) {
   const o = useLoad(() => api.overview(props.incident), [props.incident]);
   const graph = useMemo(() => (o.data === null ? null : layout(o.data)), [o.data]);
   if (o.error !== null) return <ErrorLine error={o.error} />;
   if (o.data === null || graph === null) return <Loading what="overview" />;
-  const { headline, symptom, windows, changes } = o.data;
+  const { headline, windows, changes } = o.data;
   const b = headline.baseline;
   const i = headline.incident;
   const worse = (now: number | null, before: number | null, factor: number): boolean =>
     now !== null && before !== null && now > before * factor;
 
   return (
-    <div className="grid gap-4" data-testid="view-overview">
+    <div className="grid gap-4" data-testid="view-overview" data-incident={props.incident}>
       <div className="grid grid-cols-3 gap-3">
         <Stat
           label="p99 latency"
@@ -123,6 +123,8 @@ export function OverviewView(props: { incident: string; incidents: Incident[] })
         >
           <div className="h-[360px]" data-testid="service-graph">
             <ReactFlow
+              key={props.incident}
+              fitViewOptions={{ padding: 0.15 }}
               nodes={graph.nodes}
               edges={graph.edges}
               colorMode="dark"
@@ -144,20 +146,24 @@ export function OverviewView(props: { incident: string; incidents: Incident[] })
               {props.incidents.map((inc) => (
                 <li key={inc.id}>
                   <a
-                    href={`#/incident/${inc.id}`}
-                    className="block rounded border border-zinc-800 px-2 py-1.5 hover:border-zinc-600"
+                    href={`#/overview/${inc.id}`}
+                    data-testid={`incident-${inc.id}`}
+                    className={`block rounded border px-2 py-1.5 hover:border-zinc-600 ${inc.id === props.incident ? 'border-zinc-500 bg-zinc-800/40' : 'border-zinc-800'}`}
                   >
                     <div className="flex items-center justify-between font-mono text-[12px]">
                       <span>{inc.id}</span>
-                      {inc.id === props.incident && symptom !== null && (
-                        <Chip tone={symptom.status === 'ongoing' ? 'bad' : 'warn'}>
-                          {symptom.status}
+                      {inc.symptom !== null && (
+                        <Chip tone={inc.symptom.status === 'ongoing' ? 'bad' : 'warn'}>
+                          {inc.symptom.status}
                         </Chip>
                       )}
                     </div>
-                    {inc.id === props.incident && symptom !== null && (
+                    <div className="mt-0.5 font-mono text-[11px] text-zinc-400">
+                      p99 {fmtDur(inc.headline.p99Us)} · {fmtCount(inc.headline.failures)} failed
+                    </div>
+                    {inc.symptom !== null && (
                       <div className="mt-0.5 font-mono text-[11px] text-zinc-500">
-                        {symptom.service} {symptom.metric} from {fmtT(symptom.onsetUs)}
+                        {inc.symptom.service} {inc.symptom.metric} from {fmtT(inc.symptom.onsetUs)}
                       </div>
                     )}
                   </a>

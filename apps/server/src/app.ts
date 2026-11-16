@@ -45,7 +45,7 @@ import { TelemetryStore } from '@tracepilot/store';
 import { Hono, type Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
-import { overview, serviceDetail, timeline } from './views.ts';
+import { headline, overview, serviceDetail, timeline } from './views.ts';
 
 export const INVESTIGATIONS_DIR = 'investigations';
 export const REPLAYS_DIR = 'replays';
@@ -102,7 +102,7 @@ export function knobCatalog(ctx: ToolContext) {
   const knob = (
     target: string,
     label: string,
-    unit: 'count' | 'us',
+    unit: 'count' | 'us' | 'bytes',
     min: number,
     max: number,
     current: number | null,
@@ -149,6 +149,24 @@ export function knobCatalog(ctx: ToolContext) {
       );
     }
   }
+  // Knobs of models the telemetry shows: pod memory limits where pods report replicas_ready, the
+  // cache capacity where a cache reports its hit ratio. Their values are not in telemetry.
+  for (const s of ctx.series.filter((x) => x.name === 'replicas_ready').map((x) => x.service))
+    knobs.push(
+      knob(
+        `${s}.memoryLimit`,
+        `${s} memory limit`,
+        'bytes',
+        64 * 1_048_576,
+        8192 * 1_048_576,
+        null,
+        null,
+      ),
+    );
+  if (ctx.series.some((x) => x.name === 'cache_hit_ratio'))
+    knobs.push(
+      knob('cache.capacity', 'cache capacity (entries)', 'count', 1, 2_000_000, null, null),
+    );
   return {
     notice: REPLAY_NOTICE,
     knobs: knobs.filter((k) => PatchTarget.safeParse(k.target).success),
@@ -252,7 +270,21 @@ export function createApp(options: AppOptions): TracePilotApp {
   });
 
   app.get('/api/health', (c) => c.json({ ok: true, notice: REPLAY_NOTICE }));
-  app.get('/api/incidents', (c) => c.json(store.listIncidents()));
+  // Every incident with its symptom, inferred from its telemetry. No scenario names: incidents keep
+  // their neutral IDs.
+  app.get('/api/incidents', (c) =>
+    c.json(
+      store.listIncidents().map((incident) => {
+        const ctx = ctxOf(incident.id);
+        return {
+          ...incident,
+          symptom: ctx.inferred?.symptom ?? null,
+          window: ctx.windows.incident,
+          headline: headline(ctx, ctx.graph.entryServices, ctx.windows.incident),
+        };
+      }),
+    ),
+  );
   app.get('/api/incidents/:incident/overview', (c) => c.json(overview(ctxOf(incidentParam(c)))));
   app.get('/api/incidents/:incident/timeline', (c) => c.json(timeline(ctxOf(incidentParam(c)))));
   app.get('/api/incidents/:incident/services/:service', (c) => {

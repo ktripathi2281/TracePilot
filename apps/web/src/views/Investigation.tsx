@@ -10,7 +10,7 @@ import type {
 } from '@tracepilot/server/api-types';
 import { href } from '../App.tsx';
 import { ApiError, api, runInvestigation } from '../api.ts';
-import { fmtDur, fmtT } from '../format.ts';
+import { fmtDur, fmtKnobValue, fmtT } from '../format.ts';
 import { Chip, Drawer, ErrorLine, Loading, Panel, cx, useLoad, type Tone } from '../ui/parts.tsx';
 
 const SOURCE_TONE: Record<InvestigationSource, Tone> = {
@@ -36,7 +36,7 @@ const patchText = (p: Patch): string =>
     ? `revert ${p.revert}`
     : 'variant' in p
       ? `${p.variant}:${p.service}`
-      : `${p.target}=${String(p.to)}`;
+      : `${p.target}=${fmtKnobValue(p.target, p.to)}`;
 
 function EvidenceItem({ incident, id }: { incident: string; id: string }) {
   const e = useLoad(() => api.evidence(incident, id), [incident, id]);

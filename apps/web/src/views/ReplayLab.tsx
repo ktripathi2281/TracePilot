@@ -7,7 +7,7 @@ import type {
   Sweep,
 } from '@tracepilot/server/api-types';
 import { api } from '../api.ts';
-import { fmtCount, fmtDur, fmtPct, fmtRate, fmtT, fmtUnit } from '../format.ts';
+import { fmtCount, fmtDur, fmtKnobValue, fmtPct, fmtRate, fmtT, fmtUnit } from '../format.ts';
 import { Chart, type Line } from '../ui/Chart.tsx';
 import {
   Chip,
@@ -31,9 +31,11 @@ const VERDICT_TONE: Record<string, Tone> = {
 };
 type Knob = KnobCatalog['knobs'][number];
 
-const toInput = (k: Knob, v: number): string => (k.unit === 'us' ? String(v / 1000) : String(v));
-const fromInput = (k: Knob, s: string): number =>
-  Math.round(Number(s) * (k.unit === 'us' ? 1000 : 1));
+/** Inputs show durations in ms and sizes in MiB. */
+const SCALE: Record<string, number> = { us: 1_000, bytes: 1_048_576, count: 1 };
+const UNIT_LABEL: Record<string, string> = { us: ' (ms)', bytes: ' (MiB)', count: '' };
+const toInput = (k: Knob, v: number): string => String(v / (SCALE[k.unit] ?? 1));
+const fromInput = (k: Knob, s: string): number => Math.round(Number(s) * (SCALE[k.unit] ?? 1));
 
 function patchFromParam(raw: string | null): Patch | null {
   if (raw === null) return null;
@@ -100,6 +102,15 @@ function ReplayResult({ run, entry }: { run: ReplayRun; entry: string[] }) {
       { service: 'db', metric: 'pool_in_use', title: 'db pool in use', unit: 'count' },
       { service: 'db', metric: 'pool_wait_queue', title: 'db pool wait queue', unit: 'count' },
       { service: 'db', metric: 'db_active_queries', title: 'db active queries', unit: 'count' },
+      // Pods and caches, where the incident has them.
+      ...run.original.series
+        .filter((s) => s.metric === 'replicas_ready' || s.metric === 'cache_hit_ratio')
+        .map((s) => ({
+          service: s.service,
+          metric: s.metric,
+          title: `${s.service} ${s.metric === 'replicas_ready' ? 'ready pods' : 'cache hit ratio'}`,
+          unit: s.metric === 'replicas_ready' ? 'count' : 'ratio',
+        })),
     ];
     return specs.map((c) => ({
       ...c,
@@ -128,7 +139,7 @@ function ReplayResult({ run, entry }: { run: ReplayRun; entry: string[] }) {
               ? `revert ${p.revert}`
               : 'variant' in p
                 ? `${p.variant}:${p.service}`
-                : `${p.target}=${String(p.to)}`}
+                : `${p.target}=${fmtKnobValue(p.target, p.to)}`}
           </Chip>
         ))}
         <Chip tone="good">identity replay exact</Chip>
@@ -363,11 +374,14 @@ export function ReplayLab(props: { incident: string; params: URLSearchParams }) 
       </div>
     );
   const entry = overview.data?.entryServices ?? [];
+  // Replicas matter for services that run pods; elsewhere they are hidden unless set.
+  const podServices = new Set(
+    knobs.filter((k) => k.target.endsWith('.memoryLimit')).map((k) => k.target.split('.')[0]),
+  );
   const shown = knobs.filter(
     (k) =>
-      k.target.startsWith('db.') ||
-      entry.length === 0 ||
       !k.target.endsWith('.replicas') ||
+      podServices.has(k.target.split('.')[0]) ||
       values[k.target] !== undefined,
   );
   const sweepValues = (): number[] => {
@@ -396,18 +410,19 @@ export function ReplayLab(props: { incident: string; params: URLSearchParams }) 
                 >
                   <span className="truncate">
                     {k.label}
-                    {k.unit === 'us' ? ' (ms)' : ''}
+                    {UNIT_LABEL[k.unit] ?? ''}
                   </span>
                   <input
                     type="number"
-                    min={k.unit === 'us' ? k.min / 1000 : k.min}
-                    max={k.unit === 'us' ? k.max / 1000 : k.max}
+                    min={k.min / (SCALE[k.unit] ?? 1)}
+                    max={k.max / (SCALE[k.unit] ?? 1)}
                     value={values[k.target] ?? ''}
                     placeholder={k.current === null ? '—' : toInput(k, k.current)}
                     onChange={(e) => {
                       setValues({ ...values, [k.target]: e.target.value });
                     }}
                     data-testid={`knob-${k.target}`}
+                    aria-label={k.label}
                     className="rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-right font-mono text-[12px] text-zinc-100 placeholder:text-zinc-600"
                   />
                 </label>
