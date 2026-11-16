@@ -1,4 +1,4 @@
-// The `tracepilot` command (brief §9). Phase 1 implements `sim run`; the other commands arrive
+// The `tracepilot` command (brief §9): `sim run` and `investigate`. The other commands arrive
 // with their phases and say so instead of pretending.
 //
 // Data layout under --out (default .data):
@@ -21,6 +21,7 @@ import {
 } from '@tracepilot/sim';
 import { TelemetryStore } from '@tracepilot/store';
 import { z } from 'zod';
+import { investigateCommand, type InvestigateDeps } from './investigate.ts';
 
 export interface Io {
   out: (line: string) => void;
@@ -30,14 +31,20 @@ export interface Io {
 const USAGE = `tracepilot <command>
 
   sim run --scenario <name> [--seed <n>] [--out <dir>]   simulate a scenario and ingest its telemetry
+  investigate --incident <id> [--stream] [--out <dir>]   investigate an incident and print the diagnosis
+
+Environment for investigate:
+  TRACEPILOT_LLM=live|record|replay   live (default) calls the API; record also saves a cassette;
+                                      replay uses only the cassette
+  TRACEPILOT_MODEL, TRACEPILOT_VERIFIER_MODEL, TRACEPILOT_EFFORT, MAX_TOKENS_PER_INVESTIGATION,
+  TRACEPILOT_CASSETTE_DIR (default <out>/cassettes); credentials via ANTHROPIC_API_KEY
 
 Scenarios: ${Object.keys(SCENARIOS).join(', ')}
 
 Not implemented yet:
-  investigate (Phase 3), replay / sweep (Phase 4), eval (Phase 6)`;
+  replay / sweep (Phase 4), eval (Phase 6)`;
 
 const LATER: Readonly<Record<string, string>> = {
-  investigate: 'Phase 3',
   replay: 'Phase 4',
   sweep: 'Phase 4',
   eval: 'Phase 6',
@@ -138,13 +145,14 @@ function simRun(args: string[], io: Io): number {
 }
 
 /** Runs the CLI. Returns the process exit code. */
-export function main(argv: string[], io: Io): number {
+export async function main(argv: string[], io: Io, deps: InvestigateDeps = {}): Promise<number> {
   const [command, sub, ...rest] = argv;
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
     io.out(USAGE);
     return 0;
   }
   if (command === 'sim' && sub === 'run') return simRun(rest, io);
+  if (command === 'investigate') return investigateCommand(argv.slice(1), io, deps);
   const later = LATER[command];
   if (later !== undefined) {
     io.err(`"${command}" is not implemented yet (${later}).`);

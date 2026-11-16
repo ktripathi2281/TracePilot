@@ -2,7 +2,7 @@
 import { main } from './main.ts';
 
 try {
-  process.exitCode = main(process.argv.slice(2), {
+  process.exitCode = await main(process.argv.slice(2), {
     out: (line) => {
       console.log(line);
     },
@@ -11,6 +11,6 @@ try {
     },
   });
 } catch (error) {
-  console.error(error instanceof Error ? error.message : error);
+  console.error(error instanceof Error ? (error.stack ?? error.message) : error);
   process.exitCode = 1;
 }

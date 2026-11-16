@@ -199,12 +199,17 @@ describe('evidence ledger', () => {
     id: 'le_1',
     author: 'investigator',
     type: 'FACT',
-    statement: 'pool_in_use reached 30/30 at T+10m05s',
-    tool: 'get_metric_series',
+    statement: 'db.pool is saturated: 30/30 in use',
+    tool: 'get_saturation',
+    args: { window: 'incident' },
+    findingKey: 'saturation.db.pool.status',
+    value: 'saturated',
     evidenceIds: ['mt_db_pool_in_use_605000000'],
     quantities: [
       { evidenceId: 'mt_db_pool_in_use_605000000', field: 'value', value: 30, unit: 'count' },
     ],
+    derived: [{ name: 'utilizationMean', value: 0.997, unit: 'ratio' }],
+    occurredAt: { tsUs: 605_000_000, resolutionUs: 5_000_000 },
   };
 
   it('accepts each entry type', () => {
@@ -230,8 +235,12 @@ describe('evidence ledger', () => {
     ).toBe('HYPOTHESIS');
   });
 
-  it('rejects a FACT without evidence', () => {
+  it('rejects a FACT without evidence or without the tool call it came from', () => {
     expect(FactEntry.safeParse({ ...fact, evidenceIds: [], quantities: [] }).success).toBe(false);
+    const { tool: _tool, ...noTool } = fact;
+    expect(FactEntry.safeParse(noTool).success).toBe(false);
+    const { findingKey: _key, ...noKey } = fact;
+    expect(FactEntry.safeParse(noKey).success).toBe(false);
   });
 
   it('rejects a FACT quoting a number from evidence it does not cite', () => {
@@ -265,21 +274,32 @@ describe('evidence ledger', () => {
 describe('hypotheses', () => {
   const prediction = {
     id: 'pr_1',
-    statement: 'query execution p95 stays flat',
-    check: 'compare_windows(query_exec_p95)',
+    statement: 'query execution time stays flat',
+    check: {
+      tool: 'compare_windows',
+      args: { subject: 'db_queries' },
+      findingKey: 'db_exec.flat',
+      op: 'is',
+      expected: true,
+    },
     result: 'supported',
+    observed: true,
+    note: 'finding is true',
     evidenceIds: ['mt_db_query_exec_p95_605000000'],
     ledgerEntryIds: ['le_4'],
   };
+  const h = {
+    id: 'hy_1',
+    kind: 'hold_and_wait',
+    proposedBy: 'investigator',
+    title: 'Connection hold-and-wait',
+    statement: 's',
+    predictions: [prediction],
+    status: 'supported',
+    ledgerEntryId: 'le_9',
+  };
 
   it('requires evidence for decided predictions', () => {
-    const h = {
-      id: 'hy_1',
-      title: 'Pool exhaustion',
-      statement: 's',
-      predictions: [prediction],
-      status: 'supported',
-    };
     expect(Hypothesis.safeParse(h).success).toBe(true);
     expect(
       Hypothesis.safeParse({ ...h, predictions: [{ ...prediction, evidenceIds: [] }] }).success,
@@ -287,21 +307,19 @@ describe('hypotheses', () => {
     expect(
       Hypothesis.safeParse({
         ...h,
-        predictions: [{ ...prediction, result: 'pending', evidenceIds: [] }],
+        predictions: [{ ...prediction, result: 'pending', evidenceIds: [], observed: null }],
       }).success,
     ).toBe(true);
     expect(Hypothesis.safeParse({ ...h, predictions: [] }).success).toBe(false);
   });
 
-  it('has no LLM confidence field', () => {
-    const h = {
-      id: 'hy_1',
-      title: 't',
-      statement: 's',
-      predictions: [prediction],
-      status: 'supported',
-    };
+  it('requires a structured check and a known kind, and has no LLM confidence field', () => {
     expect(Hypothesis.safeParse({ ...h, confidence: 0.9 }).success).toBe(false);
+    expect(Hypothesis.safeParse({ ...h, kind: 'gremlins' }).success).toBe(false);
+    expect(
+      Hypothesis.safeParse({ ...h, predictions: [{ ...prediction, check: 'looks flat to me' }] })
+        .success,
+    ).toBe(false);
   });
 });
 
@@ -348,16 +366,25 @@ describe('patches', () => {
 describe('diagnosis', () => {
   const diagnosis = {
     rootCause: {
-      statement: 'DB connection pool exhaustion after checkout v2.4.1',
+      statement: 'checkout holds a pooled connection while its downstream calls wait for more',
+      hypothesisId: 'hy_1',
+      kind: 'hold_and_wait',
       ledgerEntryIds: ['le_1'],
     },
-    causalChain: [{ statement: 'pool saturated', service: 'db', ledgerEntryIds: ['le_1'] }],
+    causalChain: [
+      {
+        statement: 'pool saturated',
+        service: 'db',
+        ledgerEntryIds: ['le_1'],
+        onsetEntryId: 'le_1',
+      },
+    ],
     affectedServices: ['checkout', 'api-gateway'],
     rejectedHypotheses: [
       {
         hypothesisId: 'hy_2',
         title: 'Slow DB',
-        reason: 'query exec p95 flat',
+        reason: 'execution time flat',
         ledgerEntryIds: ['le_4'],
       },
     ],
@@ -378,6 +405,14 @@ describe('diagnosis', () => {
         title: 'Raise pool capacity',
         rationale: 'pool is the saturated resource',
         patch: { target: 'db.pool.capacity', from: 30, to: 64 },
+        addresses: 'symptom',
+        ledgerEntryIds: ['le_1'],
+      },
+    ],
+    followUps: [
+      {
+        title: 'Release the connection before calling downstream',
+        rationale: 'r',
         ledgerEntryIds: ['le_1'],
       },
     ],
@@ -388,15 +423,29 @@ describe('diagnosis', () => {
     expect(Diagnosis.safeParse(diagnosis).success).toBe(true);
   });
 
-  it('rejects uncited claims and out-of-range confidence', () => {
+  it('rejects uncited claims, undated causal steps and out-of-range confidence', () => {
     expect(
-      Diagnosis.safeParse({ ...diagnosis, rootCause: { statement: 's', ledgerEntryIds: [] } })
-        .success,
+      Diagnosis.safeParse({
+        ...diagnosis,
+        rootCause: { ...diagnosis.rootCause, ledgerEntryIds: [] },
+      }).success,
     ).toBe(false);
     expect(
-      Diagnosis.safeParse({ ...diagnosis, confidence: { ...diagnosis.confidence, score: 1.2 } })
-        .success,
+      Diagnosis.safeParse({
+        ...diagnosis,
+        confidence: { ...diagnosis.confidence, score: 1.2 },
+      }).success,
     ).toBe(false);
     expect(Diagnosis.safeParse({ ...diagnosis, causalChain: [] }).success).toBe(false);
+    expect(
+      Diagnosis.safeParse({
+        ...diagnosis,
+        causalChain: [{ statement: 's', ledgerEntryIds: ['le_1'], onsetEntryId: 'le_2' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      Diagnosis.safeParse({ ...diagnosis, rootCause: { ...diagnosis.rootCause, kind: 'magic' } })
+        .success,
+    ).toBe(false);
   });
 });

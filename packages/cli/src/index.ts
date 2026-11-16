@@ -1,6 +1,6 @@
 /**
  * @tracepilot/cli — the `tracepilot` command (brief §9).
- * Phase 1–2: `sim run`. `investigate`, `replay`, `sweep` and `eval` arrive with their phases.
+ * `sim run` and `investigate`. `replay`, `sweep` and `eval` arrive with their phases.
  */
 export {
   SIM_DIR,
@@ -11,3 +11,10 @@ export {
   simRecordingPath,
   type Io,
 } from './main.ts';
+export {
+  INVESTIGATIONS_DIR,
+  investigateCommand,
+  investigationPath,
+  renderInvestigation,
+  type InvestigateDeps,
+} from './investigate.ts';

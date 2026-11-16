@@ -2,9 +2,12 @@
 
 AI-native incident investigation + deterministic counterfactual replay for distributed backends.
 
-> **Status: Phase 2 (store + analysis).** The deterministic simulator, the `pool-exhaustion`
-> scenario, the SQLite telemetry store and the analysis library exist. On scenario A the analyzers
-> find the root-cause signals without any LLM (Gate 2). Investigation and replay do not exist yet.
+> **Status: Phase 3 (agent layer), Gate 3 not yet verified.** The simulator, the
+> `pool-exhaustion` scenario, the telemetry store, the analysis library and the investigation
+> engine (`tracepilot investigate`) exist. On scenario A the analyzers find the root-cause signals
+> without any LLM (Gate 2). The investigation engine is tested with a scripted stand-in for the
+> model; **it has not yet been run against a real model**, which is what Gate 3 requires (see
+> NOTES.md, Phase 3, for how to record that run). Replay does not exist yet.
 > See [TRACEPILOT_BUILD_BRIEF.md](TRACEPILOT_BUILD_BRIEF.md) for the plan and [NOTES.md](NOTES.md)
 > for the decision log.
 
@@ -52,6 +55,18 @@ Print what the scenario produces (baseline, incident, counterfactuals, pool swee
 ```bash
 corepack pnpm run calibrate
 ```
+
+Investigate an incident (`sim run` prints its ID). This calls the Anthropic API with the
+credentials in your environment (`ANTHROPIC_API_KEY`):
+
+```bash
+corepack pnpm run tracepilot investigate --incident in_rm6f1z3tf --out .data --stream
+```
+
+The diagnosis is printed with the ledger entries it cites, and the full record is saved to
+`.data/investigations/`. `TRACEPILOT_LLM=record` also saves the model's responses to a cassette;
+`TRACEPILOT_LLM=replay` re-runs the investigation from that cassette without the API and labels
+the result as a recorded run. Other settings are listed in [.env.example](.env.example).
 
 The native SQLite driver (`better-sqlite3`) may compile during install; that needs a C++
 toolchain where no prebuilt binary exists.

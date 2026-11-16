@@ -451,3 +451,183 @@ not blame the inventory config change".
   change needs a fresh `telemetry.db`.
 - **Generality:** Gate 2 covers one scenario on 3 seeds plus 2 controls. Scenarios B/C/D (Phase 6)
   will test whether the analyzers generalize beyond this pattern.
+
+## Phase 3 — Agent layer, cassettes, CLI investigate (2026-11-16)
+
+### Gate 3 status: NOT verified (needs one recorded live run)
+
+Gate 3 is about a real model run: "`tracepilot investigate` on scenario A returns a diagnosis that
+passes the verifier, rejects at least the slow-DB alternative with cited evidence, and does not
+blame the red herrings."
+
+- **No API credentials were available while building this phase**, so no live run was made and
+  no cassette exists. Cassettes must be real recordings (brief §8), so none was written by hand.
+- **The prompts and the protocol have never been run against a real model.** The first live run
+  may show problems (a rule the model trips over, a prompt that needs work). Recording resumes
+  where it stopped, so a failed attempt costs only the calls it made.
+- `eval/src/gate3.test.ts` checks every clause of the gate by replaying
+  `eval/cassettes/<incidentId>.json`. Without that file its 7 tests are **skipped**, and CI is
+  green without Gate 3 being checked.
+- What is verified instead, with a scripted test double in place of the model: the engine around
+  the model (tools, ledger, hypothesis tests, skeptic rules, verifier, revision rounds, budget,
+  cassettes) on real scenario A telemetry. That is not evidence about model behaviour.
+
+To record (uses the API key in your environment; about 1.5 M tokens at most by the default
+budget):
+
+```bash
+corepack pnpm run tracepilot sim run --scenario pool-exhaustion --seed 42 --out .data
+```
+
+```bash
+TRACEPILOT_LLM=record TRACEPILOT_CASSETTE_DIR=eval/cassettes corepack pnpm run tracepilot investigate --incident in_rm6f1z3tf --out .data --stream
+```
+
+In PowerShell the second command is:
+
+```powershell
+$env:TRACEPILOT_LLM='record'; $env:TRACEPILOT_CASSETTE_DIR='eval/cassettes'; corepack pnpm run tracepilot investigate --incident in_rm6f1z3tf --out .data --stream
+```
+
+Then `corepack pnpm run test` runs the Gate 3 tests against the cassette. Commit the cassette if
+they pass. If the investigation fails partway, fix the cause and run the same command again.
+Changing a prompt or a tool invalidates the cassette (replay reports a miss); delete it and
+record again.
+
+### What exists
+
+- `packages/schema`: `ledger` (FACT carries tool, args, finding key, value, evidence IDs, quoted
+  and derived quantities, time), `hypothesis` (kinds, structured prediction checks), `diagnosis`
+  (root cause with kind, causal steps with onset entry, recommendations with patch and
+  `addresses`, follow-ups, verifier issues).
+- `packages/agents`:
+  - `tools/`: 14 data tools over the store and the Phase 2 analyzers, each returning **findings**
+    (key, value, statement, evidence IDs, quantities); Zod-validated arguments.
+  - `ledger.ts`: evidence ledger. FACTs are created only from tool findings.
+  - `hypotheses.ts`: proposal validation (coverage rules, defining predictions, pairwise
+    discrimination), the board that runs predictions and scores hypotheses.
+  - `verifier.ts`, `grounding.ts`: deterministic pass. `confidence.ts`: rubric.
+  - `investigate.ts`: orchestrator (investigator loop, skeptic sub-run, verifier loop with at
+    most 2 revision rounds).
+  - `llm/`: Anthropic provider, usage meter and budget, cassettes, request/response log, config.
+  - `prompts/investigator.md`, `skeptic.md`, `verifier.md`, each with a rationale header that is
+    stripped before sending.
+  - `testing.ts`: `ScriptedLlm` and `protocolScript`, test doubles only.
+- `packages/cli`: `tracepilot investigate --incident <id> [--stream] [--out <dir>]`. Saves
+  `<out>/investigations/<id>.json` (ledger, hypotheses, skeptic report, verification rounds,
+  usage) and appends `<out>/llm-logs/<id>.jsonl`. Exit 0 diagnosed, 1 inconclusive or failed,
+  2 bad input.
+- Tests: agents unit tests (32), verifier on scenario A (33), orchestrator on scenario A (33),
+  CLI investigate (10), Gate 3 replay (1 always on, 7 skipped).
+- Checks at commit time: format ✔, lint ✔, typecheck ✔, tests ✔ (373 passed, 7 skipped: schema 22, sim 74, store 13,
+  analysis 62, lint rules 45, Gate 2 + controls 40, agents 32, verifier 33, orchestrator 33, CLI 18,
+  Gate 3 guard 1; skipped: the 7 Gate 3 replay tests).
+
+### How the three rules are enforced
+
+1. **Numbers never come from the LLM.**
+   - The model cannot write a FACT. Tools produce findings; the ledger turns them into FACTs
+     with IDs; the model only cites IDs.
+   - Every number or time in model-written text (root cause, chain steps, rejection reasons,
+     recommendations, follow-ups, unknowns, inferences, skeptic statements, the reviewer's
+     reasons) must appear in the facts that text cites, after rounding and unit conversion.
+     Otherwise: `ungrounded_number`.
+   - Prediction outcomes, hypothesis status, the leading hypothesis and confidence are computed
+     by the engine.
+2. **No claim without evidence.** The deterministic pass re-checks every FACT in the ledger
+   against the store (evidence exists, quoted fields match exactly) and re-runs its tool call
+   with a fresh context (value, statement, derived quantities, time and evidence must be
+   reproduced). Then it checks the draft.
+3. **No hardcoded demo.** Prompts contain nothing about any system or scenario (tested).
+   Cassettes record what answered them (`upstream: live | scripted`); a cassette recorded from
+   the test double replays in mode `scripted` and is never shown as a recorded run. A test fails
+   if a non-live cassette is ever put in `eval/cassettes/`.
+
+### The four required verifier rejections
+
+Each has its own tests in `eval/src/verifier.test.ts`, on real scenario A facts, by corrupting
+one thing in an otherwise accepted diagnosis:
+
+| Requirement                | Issue code                            | Cases tested                                                                                                                                                               |
+| -------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fabricated IDs             | `missing_evidence`                    | Unknown ledger ID in every section; a FACT citing a span, metric point or change event not in the store; a patch reverting a missing change; a made-up tool or finding key |
+| Mismatched numbers         | `value_mismatch`, `ungrounded_number` | Quoted field changed; derived quantity changed; statement edited; verdict flipped; time moved; a claim with a number its cited facts lack; a wrong patch `from`            |
+| HYPOTHESIS used as premise | `hypothesis_as_premise`               | Hypothesis cited in any section; root cause resting only on its hypothesis; an INFERENCE with a hypothesis premise; the same laundered through a second inference          |
+| Effect before cause        | `temporal_precedence`                 | The real chain reversed; a later onset blamed for an earlier event; a violation between non-adjacent steps; an undated step. Two onsets too close to order are NOT flagged |
+
+### Decisions (and deviations)
+
+1. **Predictions are structured, not prose.** A prediction is `{tool, args, findingKey, op,
+expected}`. The engine runs the tool and compares. A hypothesis is rejected if any prediction
+   is contradicted; supported if at least one is supported and the inconclusive ones do not
+   outnumber the supported ones.
+2. **Required hypotheses come from a coverage rule, not from the prompt.** If a connection pool
+   is saturated in the incident window, a proposal must contain the kinds `pool_capacity`,
+   `hold_and_wait` and `db_slow`, and these must be pairwise discriminated: a prediction on the
+   same finding with conflicting expectations. The rule is triggered by telemetry, not by the
+   scenario.
+3. **Defining predictions.** A hypothesis of one of those kinds must include the prediction that
+   defines the kind (hold-and-wait detected; connections not idle-held; DB execution not flat).
+   Without this a "pool too small" label could be put on hold-and-wait predictions and come out
+   supported.
+4. **Structural root cause.** `rootCause.kind` is copied by the engine from the hypothesis that
+   survived, and the root cause must cite a fact that supported one of its predictions. On
+   scenario A the pool-capacity hypothesis is rejected by the idle-held finding, so "the pool is
+   too small" cannot be published as the root cause. Recommendations carry a replay patch and
+   `addresses: cause | symptom`; fixes that cannot be simulated (a code change) are `followUps`.
+5. **Skeptic.** Separate prompt and context (it gets a brief, not the investigator's
+   conversation). It must run at least 3 tool queries nobody ran before, and both its challenge
+   to the leading hypothesis and its checks of the strongest alternative must cite a fact from
+   those new queries. The alternative is an existing hypothesis or a new one, which the engine
+   tests like any other.
+6. **Temporal precedence** flags only certain violations: an effect that had begun before the
+   earliest moment its cause could have begun (onset time minus resolution).
+7. **Verifier LLM pass** runs only when the deterministic pass is clean. Its reasons are held to
+   the number rule too.
+8. **Confidence rubric:** share of supported predictions of the root hypothesis; −0.25 per
+   refuting skeptic challenge; −0.10 each for a weakened challenge, violated precedence, no
+   rejected alternative, no valid skeptic challenge; −0.15 per unresolved verifier issue (3 at
+   most). High ≥ 0.75, medium ≥ 0.5.
+9. **Budget default raised from 400,000 to 1,500,000 tokens.** The budget counts every token
+   read or written, cached input included, and a tool loop resends its history each turn.
+   400,000 would stop an ordinary investigation. This is an estimate; the first live run will
+   show the real figure.
+10. **API usage:** `tool_choice` is left at auto (the current models reject forced tool use),
+    so a turn without a tool call is answered with a reminder, 3 times at most.
+    Effort is `medium` by default. Prompt caching is on.
+11. **Server-side model fallback is on by default** (`TRACEPILOT_LLM_FALLBACKS=off` disables
+    it): if the requested model declines a request, the API may answer with another model. The
+    usage record prices by the model that answered.
+12. **Verifier model** defaults to the main model. The brief mentions Opus for the final pass;
+    set `TRACEPILOT_VERIFIER_MODEL` for that.
+13. **Cassettes:** one file per incident, keyed by SHA-256 of the canonical request. `record`
+    replays what is already recorded and records the rest. `replay` fails on any miss and names
+    the settings the cassette was recorded with.
+14. **Unresolved issues:** after 2 failed revisions the diagnosis is published with
+    `unresolvedIssues`, the CLI prints them, and the exit code is still 0. Callers that need a
+    verified diagnosis must check that list.
+
+### Assumptions
+
+- A model follows the tool protocol well enough that 4 rejected proposals, 4 rejected
+  challenges and 2 revision rounds are sufficient. Untested.
+- One investigation fits in the model's context window (45 investigator turns at most).
+- The reviewer is the only role offered exactly one tool; the Gate 3 test uses that to read the
+  verifier model back from the cassette.
+
+### Known gaps
+
+- **Gate 3** (above).
+- **Number grounding is unit-blind and loose for small numbers.** A number passes if it matches
+  any number in the cited facts after rounding, or after scaling by a power of 1000 or by 100. Found in testing:
+  "a pool of 50 connections" passed because a cited fact contained a 49.7 ms resolution.
+  A wrong small integer can slip through; the reviewer pass is the only other check.
+- **The verifier does not judge prose without numbers.** "Connections were held" next to a fact
+  that says otherwise is caught only by the LLM reviewer.
+- **Coverage rules:** only the saturated-connection-pool rule exists. Other incident patterns
+  get no required hypotheses yet (scenarios B to D, Phase 6).
+- **Defining predictions exist for 3 kinds only.** The other kinds are free-form labels.
+- **Cost figures** use a small built-in price table; unknown models report no cost.
+- **The request log** keeps the newest message of each request, not the whole request.
+- **Test time:** the verifier and orchestrator tests take about 40 s each, because every
+  verification re-runs all tool calls.
