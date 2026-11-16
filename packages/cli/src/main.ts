@@ -23,6 +23,7 @@ import { TelemetryStore } from '@tracepilot/store';
 import { investigateCommand, type InvestigateDeps } from './investigate.ts';
 import { EXIT } from './exit.ts';
 import { replayCommand, sweepCommand } from './replay.ts';
+import { evalCommand } from './eval.ts';
 import { serveCommand } from './serve.ts';
 
 export { SIM_DIR, SimRecordingFile, readSimRecording, simRecordingPath } from '@tracepilot/replay';
@@ -53,17 +54,12 @@ Scenarios: ${Object.keys(SCENARIOS).join(', ')}
   sweep --incident <id> --param <target> --range <from>:<to>:<step> [--patch ...]
                                                          replay a range of values of one knob
   serve [--out <dir>] [--port <n>]                       the API and the web UI (default :4318)
+  eval [--scenario <name>]... [--seed <n>]... [--investigator auto|scripted|cassette|live]
+       [--json] [--write-readme]                         score investigations against ground truth
 
   Replay results are simulated from a model of the system, not a guarantee of production behavior.
 
-Exit codes: 0 done, 1 failed, 2 diagnosis not verified (investigate), 64 bad input.
-
-Not implemented yet:
-  eval (Phase 6)`;
-
-const LATER: Readonly<Record<string, string>> = {
-  eval: 'Phase 6',
-};
+Exit codes: 0 done, 1 failed, 2 diagnosis not verified (investigate), 64 bad input.`;
 
 export const STORE_FILE = 'telemetry.db';
 
@@ -149,11 +145,7 @@ export async function main(argv: string[], io: Io, deps: InvestigateDeps = {}): 
   if (command === 'replay') return replayCommand(argv.slice(1), io);
   if (command === 'sweep') return sweepCommand(argv.slice(1), io);
   if (command === 'serve') return serveCommand(argv.slice(1), io);
-  const later = LATER[command];
-  if (later !== undefined) {
-    io.err(`"${command}" is not implemented yet (${later}).`);
-    return EXIT.usage;
-  }
+  if (command === 'eval') return evalCommand(argv.slice(1), io);
   io.err(`unknown command: ${argv.join(' ')}\n\n${USAGE}`);
   return EXIT.usage;
 }

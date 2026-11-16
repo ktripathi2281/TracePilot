@@ -911,3 +911,38 @@ through `playwright-core` (no browser download); `TRACEPILOT_BROWSER` overrides 
   only.
 - **The bundle is ~500 kB** (React Flow and uPlot); no code splitting.
 - **No auth**, by design (brief §12 non-goal): bind to localhost.
+
+## Phase 6 — README, eval harness, scenarios (2026-11-16)
+
+### (a) README
+
+Rewritten around the architecture (simulator side vs investigator side, package table), the three
+rules as enforced, the synthetic-data caveat, non-goals and a 2-minute demo script that needs no
+API key. The demo uses the scripted fixture and says so; step 3b records a real run.
+
+### (b) Eval harness
+
+- `eval/src/harness.ts` and `tracepilot eval [--scenario] [--seed] [--investigator
+auto|scripted|cassette|live] [--json] [--write-readme]`. Each run simulates the scenario into an
+  in-memory store, investigates, scores and replays.
+- **Scores**, all deterministic: root cause (the diagnosis's `rootCause.kind` is one the ground
+  truth accepts, and the causal chain or the cause recommendation cites the culprit change);
+  evidence validity (ledger FACTs that re-verify against the store); hallucinations (an
+  independent deterministic re-verification of the PUBLISHED diagnosis: fabricated IDs, mismatched
+  or ungrounded numbers, hypotheses as premises; drafts caught in revision are counted apart); red
+  herrings not blamed (no herring fact behind the root cause, chain or a cause fix, and no revert of
+  a herring change); skeptic challenged; and the recommended patch (first `cause`
+  recommendation, else the first) resolving or improving the incident in replay. Pass = all six.
+- **Who played the model is part of every row.** `auto` uses a recorded live cassette when one
+  exists for that scenario and seed, otherwise the scripted fixture plus a "model: not run" row.
+  There is no cassette yet, so every result in the README is the scripted fixture: it tests the
+  engine, not a model.
+- **Ground truth** gained `rootCause.hypothesisKinds` (the kinds that name the mechanism); the
+  schema is in `eval/src/ground-truth.ts`.
+- **The harness is tested on wrong answers**: a diagnosis that blames the red-herring change, a
+  root cause of the wrong kind, a number published after two failed revisions (1 hallucination, 2
+  caught in revision), and an investigation that fails (a failed row, not a crash).
+- **The README table is checked**: a test re-runs the harness for every scenario and seed in the
+  README table and requires the same scripted rows (cells compared without Prettier's padding).
+- Results on scenario A, seeds 42, 3 and 7: pass on every score (100 % of 96–97 facts valid,
+  0 hallucinations, revert ev_2 resolves).

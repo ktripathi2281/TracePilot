@@ -7,7 +7,8 @@
     "service": "checkout",
     "resource": "db.pool",
     "mechanism": "checkout holds one pooled connection for its order transaction while it calls inventory and payment, which need connections from the same pool (hold-and-wait). The deploy raised checkout workers 20 -> 60 and stock reservation fan-out 1 -> 4 with the pool still at 30. Demand rose to about 90% of the pool, queries began to wait, waiting kept transactions open longer, and with 60 workers checkout could hold all 30 connections while its own downstream queries starved.",
-    "symptomService": "api-gateway"
+    "symptomService": "api-gateway",
+    "hypothesisKinds": ["hold_and_wait"]
   },
   "causalChain": [
     {

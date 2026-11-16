@@ -125,9 +125,15 @@ describe('tracepilot argument handling', () => {
     }
   });
 
-  it('says which phase brings the commands that do not exist yet', async () => {
-    const c = capture();
-    expect(await main(['eval', '--scenario', 'pool-exhaustion'], c.io)).toBe(64);
-    expect(c.err.join('\n')).toMatch(/not implemented yet \(Phase 6\)/);
+  it('rejects eval input it cannot score', async () => {
+    for (const argv of [
+      ['eval', '--scenario', 'no-such-scenario'],
+      ['eval', '--investigator', 'oracle'],
+      ['eval', '--seed', 'x'],
+    ]) {
+      const c = capture();
+      expect(await main(argv, c.io), argv.join(' ')).toBe(64);
+      expect(c.err.length).toBeGreaterThan(0);
+    }
   });
 });
