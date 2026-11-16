@@ -136,6 +136,13 @@ const SIGNATURES: Partial<Record<HypothesisKind, Signature>> = {
     describe:
       'analyze_hold_and_wait finding hold_and_wait.<window>.idle_held is false (in-use connections are busy with database work, not held idle)',
   },
+  resource_limit: {
+    tool: 'get_pod_events',
+    key: /^pods\.[^.]+\.[^.]+\.(oom_killed|disrupted)$/,
+    expected: true,
+    describe:
+      'get_pod_events finding pods.<service>.<window>.oom_killed (or disrupted) is true (a pod was killed or taken out of service)',
+  },
   db_slow: {
     tool: 'compare_windows',
     key: /^db_exec\.[^.]+\.flat$/,

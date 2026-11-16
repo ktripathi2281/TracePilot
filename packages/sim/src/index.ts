@@ -12,5 +12,6 @@ export * from './hash.ts';
 export * from './summary.ts';
 export * from './scenarios/index.ts';
 export * from './scenarios/pool-exhaustion.ts';
+export * from './scenarios/bad-rollout-oomkill.ts';
 export { uniform, sampleDist, mulberry32 } from './rng.ts';
 export { percentile } from './util.ts';

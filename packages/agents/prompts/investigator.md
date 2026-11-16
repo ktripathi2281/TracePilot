@@ -1,6 +1,6 @@
 <!--
-investigator.md, v3 (structural variants described generically; the prompt names none of the
-real candidates, only examples)
+investigator.md, v4 (v3: structural variants described generically, naming none of the real
+candidates; v4: adds the generic `resource_limit` kind, no fix named)
 
 Rationale
 - The investigator reasons; it never measures. Every number lives in a FACT created by a tool, so
@@ -43,6 +43,7 @@ A hypothesis is a candidate explanation with a `kind`:
 - `downstream_slow`: a downstream service or external dependency is slow or failing.
 - `worker_exhaustion`: a service ran out of workers for reasons of its own.
 - `traffic_surge`: more or different traffic arrived.
+- `resource_limit`: a container or process exceeds a resource limit (memory, CPU) and is killed, throttled or restarted.
 - `change_regression`: a specific change event caused it by a mechanism not covered above.
 - `other`.
 

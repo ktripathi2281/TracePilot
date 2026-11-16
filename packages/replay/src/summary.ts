@@ -161,7 +161,9 @@ export function degraded(
     list.push(o.endUs - o.arrivalUs);
     if (o.status !== 'ok') failed.set(b, (failed.get(b) ?? 0) + 1);
   }
-  const count = Math.ceil((w.toUs - w.fromUs) / t.bucketUs);
+  // Full buckets only: a sliver at the end of the window (the window ends 1 µs past the last
+  // sample) would count as "nothing finished".
+  const count = Math.floor((w.toUs - w.fromUs) / t.bucketUs);
   let degradedBuckets = 0;
   let first: number | null = null;
   for (let b = 0; b < count; b++) {

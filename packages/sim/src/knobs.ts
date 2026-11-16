@@ -2,7 +2,8 @@
 //
 // A knob target is `<component>.<key>`: `db.pool.capacity`, `db.acquireTimeoutUs`,
 // `db.maxParallelQueries`, `<service>.workers|replicas|queueLimit|timeoutUs`,
-// `<service>.params.<name>`.
+// `<service>.params.<name>`, and for services with a pod model `<service>.memoryLimit` and
+// `<service>.memoryPerRequest` (bytes).
 
 import {
   isRevertPatch,
@@ -26,7 +27,6 @@ const isServiceKnob = (k: string): k is ServiceKnobKey =>
 
 /** Knobs the patch grammar allows but this engine does not model yet. */
 const NOT_MODELED: Readonly<Record<string, string>> = {
-  memoryLimit: 'pod memory limits arrive with the pod lifecycle model (Scenario D)',
   cpuLimit: 'pod CPU limits arrive with the pod lifecycle model (Scenario D)',
   consumers: 'the topology has no message queue component',
 };
@@ -87,6 +87,8 @@ export function getKnob(model: SystemModel, target: string): number | undefined 
   const svc = model.services[component];
   if (svc === undefined) return undefined;
   if (isServiceKnob(key)) return svc[key];
+  if (key === 'memoryLimit') return svc.pods?.memoryLimitBytes;
+  if (key === 'memoryPerRequest') return svc.pods?.memoryPerRequestBytes;
   if (key.startsWith('params.')) return svc.params[key.slice('params.'.length)];
   return undefined;
 }
@@ -115,6 +117,12 @@ export function setKnob(model: SystemModel, target: string, value: number): bool
   if (isServiceKnob(key)) {
     if (key !== 'queueLimit') needPositive();
     svc[key] = value;
+  } else if (key === 'memoryLimit' || key === 'memoryPerRequest') {
+    if (svc.pods === undefined) return false;
+    if (key === 'memoryLimit') {
+      needPositive();
+      svc.pods.memoryLimitBytes = value;
+    } else svc.pods.memoryPerRequestBytes = value;
   } else {
     svc.params[key.slice('params.'.length)] = value;
   }
@@ -155,7 +163,11 @@ export function applyPatches(config: SimConfig, patches: readonly Patch[]): SimC
       throw new UnsupportedKnobError(`patch target ${patch.target} is not supported: ${why}`);
     }
     if (!setKnob(next.model, patch.target, patch.to)) {
-      throw new UnsupportedKnobError(`patch target ${patch.target} does not exist in this model`);
+      throw new UnsupportedKnobError(
+        key === 'memoryLimit'
+          ? `patch target ${patch.target} is not supported: that service has no pod lifecycle model`
+          : `patch target ${patch.target} does not exist in this model`,
+      );
     }
     pins.add(patch.target);
   }

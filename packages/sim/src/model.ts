@@ -142,6 +142,27 @@ export const Step: z.ZodType<Step> = z.lazy(() =>
 export const Operation = z.strictObject({ steps: z.array(Step).min(1) });
 export type Operation = z.infer<typeof Operation>;
 
+/**
+ * Pod lifecycle (Kubernetes-style, simulated; brief §5 Scenario D). Each replica is a pod whose
+ * memory is base + perRequest × requests it is processing. Above the limit the pod is OOMKilled:
+ * its in-flight and queued requests fail, it restarts after an exponential back-off
+ * (CrashLoopBackOff from the second consecutive kill) and takes traffic again once started.
+ * Only ready pods receive requests.
+ */
+export const PodModel = z.strictObject({
+  memoryBaseBytes: PositiveInt,
+  memoryPerRequestBytes: z.number().int().nonnegative(),
+  memoryLimitBytes: PositiveInt,
+  /** First restart delay; doubles with every consecutive kill, up to maxBackoffUs. */
+  restartBackoffUs: PositiveInt,
+  maxBackoffUs: PositiveInt,
+  /** From restart to ready (taking traffic). */
+  startupUs: PositiveInt,
+  /** A pod that stayed up this long starts its back-off from the beginning again. */
+  backoffResetUs: PositiveInt,
+});
+export type PodModel = z.infer<typeof PodModel>;
+
 export const ServiceModel = z.strictObject({
   /** Identical pods, load-balanced round-robin, each with its own workers and queue. */
   replicas: PositiveInt,
@@ -154,6 +175,8 @@ export const ServiceModel = z.strictObject({
   /** Named numeric parameters read by steps (e.g. a fan-out count). */
   params: z.record(z.string().min(1), z.number().int().nonnegative()),
   operations: z.record(z.string().min(1), Operation),
+  /** Optional pod lifecycle; without it replicas never fail. */
+  pods: PodModel.optional(),
 });
 export type ServiceModel = z.infer<typeof ServiceModel>;
 

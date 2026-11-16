@@ -58,8 +58,9 @@ describe('applyPatches', () => {
     expect(() => applyPatches(config, [{ target: 'cache.capacity', to: 10 }])).toThrow(
       UnsupportedKnobError,
     );
+    // Scenario A's checkout has no pod model, so it has no memory limit to change.
     expect(() => applyPatches(config, [{ target: 'checkout.memoryLimit', to: 10 }])).toThrow(
-      /Scenario D/,
+      /no pod lifecycle model/,
     );
     expect(() => applyPatches(config, [{ target: 'orders.consumers', to: 2 }])).toThrow(
       /message queue/,

@@ -25,6 +25,8 @@ export const HypothesisKind = z.enum([
   'worker_exhaustion',
   /** More or different traffic arrived. */
   'traffic_surge',
+  /** A container or process exceeds a resource limit (memory, CPU) and is killed, throttled or restarted. */
+  'resource_limit',
   /** A specific change event caused it by a mechanism not covered above. */
   'change_regression',
   'other',

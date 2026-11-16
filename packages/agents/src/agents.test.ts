@@ -182,6 +182,7 @@ describe('tool plumbing', () => {
       'compare_windows',
       'analyze_hold_and_wait',
       'correlate_changes',
+      'get_pod_events',
     ]);
     for (const s of specs) {
       expect(s.input_schema.type, s.name).toBe('object');

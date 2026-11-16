@@ -133,6 +133,7 @@ export function timeline(ctx: ToolContext) {
     windows: { baseline: ctx.windows.baseline, incident: ctx.windows.incident },
     entries: buildTimeline({
       changes: ctx.changes,
+      podEvents: ctx.podEvents,
       anomalies: ctx.anomalies.anomalies,
       logBursts: ctx.logBursts,
     }),

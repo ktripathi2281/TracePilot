@@ -29,6 +29,7 @@ import {
   medianItems,
   quantile,
   spanEvidence,
+  summarizePods,
   type TraceTree,
 } from '@tracepilot/analysis';
 import { z } from 'zod';
@@ -499,6 +500,96 @@ Findings: \`saturation.<resource>.<window>.status\`: value saturated (≥95 % ut
   },
 };
 
+// ---- get_pod_events ---------------------------------------------------------------------------
+
+const getPodEvents: ToolDef<typeof WindowOnly> = {
+  name: 'get_pod_events',
+  description: `Kubernetes-style pod lifecycle per service in a window: OOMKilled, CrashLoopBackOff, Restarted, Evicted, ReadinessFailed events, from pod events and the replicas_ready metric. Argument: window.
+Findings: \`pods.<service>.<window>.oom_killed\` (true | false; dated at the first OOMKilled), \`pods.<service>.<window>.crash_loop\` (true | false), \`pods.<service>.<window>.disrupted\` (true | false: any pod taken out of service; dated at the first). Services without pod events get false findings only if they report replicas_ready.`,
+  input: WindowOnly,
+  run: (ctx, args) => {
+    const w = ctx.resolveWindow(args.window);
+    const summaries = summarizePods(ctx.podEvents, w.window);
+    const findings: Finding[] = [];
+    for (const p of summaries) {
+      const base = `pods.${p.service}.${w.label}`;
+      const counts = `${String(p.oomKilled)} OOMKilled, ${String(p.crashLoopBackOff)} CrashLoopBackOff, ${String(p.restarted)} restarts, ${String(p.evicted)} evicted, ${String(p.readinessFailed)} readiness failures across ${p.pods.join(', ')}`;
+      const derived = [
+        d('oomKilled', p.oomKilled, 'count'),
+        d('crashLoopBackOff', p.crashLoopBackOff, 'count'),
+        d('restarted', p.restarted, 'count'),
+        d('podsAffected', p.pods.length, 'count'),
+      ];
+      const first = p.firstOomKilled;
+      findings.push({
+        key: `${base}.oom_killed`,
+        statement: `${p.service} pods in ${windowWords(w.label)}: ${counts}.${first === null ? '' : ` First OOMKilled at ${fmtT(first.ts)}.`}`,
+        value: p.oomKilled > 0,
+        evidenceIds: p.evidenceIds,
+        quantities:
+          first === null
+            ? []
+            : [{ evidenceId: first.evidenceId, field: 'ts', value: first.ts, unit: 'us' }],
+        derived,
+        ...(first === null ? {} : { occurredAt: { tsUs: first.ts, resolutionUs: 1 } }),
+      });
+      findings.push({
+        key: `${base}.crash_loop`,
+        statement: `${p.service} pods in ${windowWords(w.label)}: ${String(p.crashLoopBackOff)} CrashLoopBackOff events (restart back-off after repeated failures).`,
+        value: p.crashLoopBackOff > 0,
+        evidenceIds: p.evidenceIds,
+        quantities: [],
+        derived: [d('crashLoopBackOff', p.crashLoopBackOff, 'count')],
+      });
+      const dis = p.firstDisruption;
+      findings.push({
+        key: `${base}.disrupted`,
+        statement: `${p.service} pods in ${windowWords(w.label)}: ${dis === null ? 'no pod was taken out of service' : `first taken out of service at ${fmtT(dis.ts)} (${dis.reason})`}.`,
+        value: dis !== null,
+        evidenceIds: p.evidenceIds,
+        quantities:
+          dis === null
+            ? []
+            : [{ evidenceId: dis.evidenceId, field: 'ts', value: dis.ts, unit: 'us' }],
+        derived: [],
+        ...(dis === null ? {} : { occurredAt: { tsUs: dis.ts, resolutionUs: 1 } }),
+      });
+    }
+    // Services that run pods (they report replicas_ready) but had no events: explicit "false".
+    const withEvents = new Set(summaries.map((p) => p.service));
+    for (const s of ctx.series.filter(
+      (x) => x.name === 'replicas_ready' && !withEvents.has(x.service),
+    )) {
+      const pts = s.points.filter((pt) => inWindow(pt.ts, w.window));
+      const firstPoint = pts[0];
+      if (firstPoint === undefined) continue;
+      const evidence = uniq(
+        [
+          firstPoint.evidenceId,
+          ...(pts.at(-1) === undefined ? [] : [pts.at(-1)?.evidenceId ?? '']),
+        ].filter((x) => x !== ''),
+      );
+      const statement = `${s.service} pods in ${windowWords(w.label)}: no pod events; replicas_ready stayed between ${fmtNum(Math.min(...pts.map((pt) => pt.value)))} and ${fmtNum(Math.max(...pts.map((pt) => pt.value)))}.`;
+      for (const k of ['oom_killed', 'crash_loop', 'disrupted'])
+        findings.push({
+          key: `pods.${s.service}.${w.label}.${k}`,
+          statement,
+          value: false,
+          evidenceIds: evidence,
+          quantities: [],
+          derived: [],
+        });
+    }
+    const hit = summaries.filter((p) => p.oomKilled > 0).map((p) => p.service);
+    return output(
+      findings.length === 0
+        ? `No pod events and no pod metrics in ${windowWords(w.label)}.`
+        : `OOMKilled pods in ${windowWords(w.label)}: ${hit.length === 0 ? 'none' : hit.join(', ')}.`,
+      findings,
+    );
+  },
+};
+
 // ---- 9. analyze_propagation ------------------------------------------------------------------
 
 const analyzePropagationTool: ToolDef = {
@@ -508,7 +599,7 @@ Findings:
 - \`propagation.origin\`: value is the comma-separated node(s) where failure paths end (candidate origins), or "none".
 - \`propagation.onset.<node>\`: value span | metric (basis); dated.
 - \`propagation.edge.<caller>.<callee>\`: value callee_first (consistent with failure propagating upward) | caller_first | inconclusive.
-- \`propagation.excluded.<service>.<metric>\`: value recovered_before_incident (an earlier episode that is not part of this incident).`,
+- \`propagation.excluded.<service>.<metric>.<onsetUs>\`: value recovered_before_incident (an earlier episode that is not part of this incident) | less_work (the node received less work, e.g. request rate down: a consequence of its callers failing, not a failure of its own).`,
   input: z.strictObject({}),
   run: (ctx) => {
     const anomalies = ctx.anomalies.anomalies;
@@ -582,9 +673,12 @@ Findings:
         (y) => y.service === x.service && y.metric === x.metric && y.onsetUs === x.onsetUs,
       );
       findings.push({
-        key: `propagation.excluded.${x.service}.${x.metric}`,
-        statement: `${x.service} ${x.metric} anomaly from ${fmtT(x.onsetUs)} is not part of this incident: it recovered at ${fmtT(x.endUs ?? 0)}, before the incident window.`,
-        value: 'recovered_before_incident',
+        key: `propagation.excluded.${x.service}.${x.metric}.${String(x.onsetUs)}`,
+        statement:
+          x.kind === 'recovered_before_incident'
+            ? `${x.service} ${x.metric} anomaly from ${fmtT(x.onsetUs)} is not part of this incident: it recovered at ${fmtT(x.endUs ?? 0)}, before the incident window.`
+            : `${x.service} ${x.metric} anomaly from ${fmtT(x.onsetUs)} is not counted as ${x.service} failing: ${x.reason}.`,
+        value: x.kind,
         evidenceIds: uniq(a?.evidenceIds ?? [], 3),
         quantities: [],
         derived: [
@@ -1005,6 +1099,7 @@ export const DATA_TOOLS: readonly ToolDef[] = [
   compareWindows,
   analyzeHoldAndWaitTool,
   correlateChangesTool,
+  getPodEvents,
 ] as readonly ToolDef[];
 
 export const DATA_TOOL_NAMES: readonly string[] = DATA_TOOLS.map((t) => t.name);

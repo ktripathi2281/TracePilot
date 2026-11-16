@@ -67,7 +67,7 @@ grading our own homework:
 | Package                   | Role                                                                                                                                                                                                                                                      |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `packages/schema`         | Zod schemas for telemetry, evidence IDs, ledger, hypotheses, diagnosis, patches.                                                                                                                                                                          |
-| `packages/sim`            | Deterministic discrete-event simulator: services with replicas and workers, a DB connection pool and executor, call graphs, scheduled changes. Same inputs ⇒ byte-identical telemetry.                                                                    |
+| `packages/sim`            | Deterministic discrete-event simulator: services with replicas and workers, a DB connection pool and executor, call graphs, scheduled changes, a pod lifecycle (memory limits, OOMKill, back-off). Same inputs ⇒ byte-identical telemetry.                |
 | `packages/store`          | SQLite telemetry store, the only way the agents read data. Stores telemetry only.                                                                                                                                                                         |
 | `packages/analysis`       | Pure analyzers over telemetry: incident windows, anomaly onsets, dependency graph, latency attribution, saturation, hold-and-wait, propagation, change correlation. No I/O, no LLM.                                                                       |
 | `packages/agents`         | Tools over store + analysis, the evidence ledger, the hypothesis engine (structured predictions the engine runs), the skeptic, the verifier, the Anthropic provider, cassettes and the token budget. Prompts are versioned in `packages/agents/prompts/`. |
@@ -143,25 +143,40 @@ knee at 60 connections. All of it is simulated from a model, as the banner says.
 TRACEPILOT_LLM=record TRACEPILOT_CASSETTE_DIR=eval/cassettes corepack pnpm run tracepilot investigate --incident in_rm6f1z3tf --out .data --stream
 ```
 
+## Scenarios
+
+| Scenario                  | What happens                                                                                                                                                                 | Red herrings                                                                                                                                                     | Replay outcomes (simulator output)                                                                                                        |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `pool-exhaustion` (A)     | A checkout deploy raises workers and fan-out; checkout holds a DB connection while its downstream calls wait for more from the same pool (hold-and-wait), and the pool jams. | An inventory config change; a self-resolving payment-provider blip.                                                                                              | Revert resolves; pool 64 resolves but moves pressure to the DB executor; fewer workers mostly resolves; a longer acquire timeout worsens. |
+| `bad-rollout-oomkill` (D) | A checkout rollout raises per-request memory; pods are OOMKilled, crash-loop, and with no ready pod checkout refuses requests. Simulated pod lifecycle, no real cluster.     | A payment config change; a self-resolving DB-latency blip; an inventory change just after the onset. The pool is NOT saturated (scenario A's pattern is absent). | Revert or a larger memory limit resolves; pool 64 does nothing; more replicas is seed-dependent.                                          |
+
+Scenarios B and C of the brief are not built.
+
 ## Eval results
 
 `tracepilot eval` simulates each scenario, investigates it, scores the diagnosis against
 `eval/ground-truth/` and replays the recommended patch. **Read the Investigator column first.**
 "scripted fixture" is a test double that follows the investigation protocol on real tool output;
 its rows test the engine (tools, verifier, replay), **not a model's reasoning**, and its fixed
-procedure is written for connection-pool incidents. A model row appears once a real run is
+procedure is written for connection-pool incidents, so it fails scenario D by construction. A model row appears once a real run is
 recorded (`eval/cassettes/`, see NOTES.md, Phase 3).
 
 <!-- eval:start (generated by `tracepilot eval --write-readme`) -->
 
-| Scenario                  | Investigator     | Root cause                                                              | Evidence valid | Hallucinations | Red herrings not blamed | Skeptic challenged | Recommended patch in replay     | Overall  |
-| ------------------------- | ---------------- | ----------------------------------------------------------------------- | -------------- | -------------- | ----------------------- | ------------------ | ------------------------------- | -------- |
-| pool-exhaustion (seed 42) | scripted fixture | match (hold_and_wait)                                                   | 100% of 97     | 0              | yes                     | yes                | `revert ev_2` (cause): resolves | **pass** |
-| pool-exhaustion (seed 42) | model (recorded) | not run: no recorded cassette yet (needs an API key; NOTES.md, Phase 3) | —              | —              | —                       | —                  | —                               | —        |
-| pool-exhaustion (seed 3)  | scripted fixture | match (hold_and_wait)                                                   | 100% of 96     | 0              | yes                     | yes                | `revert ev_2` (cause): resolves | **pass** |
-| pool-exhaustion (seed 3)  | model (recorded) | not run: no recorded cassette yet (needs an API key; NOTES.md, Phase 3) | —              | —              | —                       | —                  | —                               | —        |
-| pool-exhaustion (seed 7)  | scripted fixture | match (hold_and_wait)                                                   | 100% of 97     | 0              | yes                     | yes                | `revert ev_2` (cause): resolves | **pass** |
-| pool-exhaustion (seed 7)  | model (recorded) | not run: no recorded cassette yet (needs an API key; NOTES.md, Phase 3) | —              | —              | —                       | —                  | —                               | —        |
+| Scenario                      | Investigator     | Root cause                                                              | Evidence valid | Hallucinations | Red herrings not blamed | Skeptic challenged | Recommended patch in replay     | Overall  |
+| ----------------------------- | ---------------- | ----------------------------------------------------------------------- | -------------- | -------------- | ----------------------- | ------------------ | ------------------------------- | -------- |
+| pool-exhaustion (seed 42)     | scripted fixture | match (hold_and_wait)                                                   | 100% of 105    | 0              | yes                     | yes                | `revert ev_2` (cause): resolves | **pass** |
+| pool-exhaustion (seed 42)     | model (recorded) | not run: no recorded cassette yet (needs an API key; NOTES.md, Phase 3) | —              | —              | —                       | —                  | —                               | —        |
+| pool-exhaustion (seed 3)      | scripted fixture | match (hold_and_wait)                                                   | 100% of 102    | 0              | yes                     | yes                | `revert ev_2` (cause): resolves | **pass** |
+| pool-exhaustion (seed 3)      | model (recorded) | not run: no recorded cassette yet (needs an API key; NOTES.md, Phase 3) | —              | —              | —                       | —                  | —                               | —        |
+| pool-exhaustion (seed 7)      | scripted fixture | match (hold_and_wait)                                                   | 100% of 103    | 0              | yes                     | yes                | `revert ev_2` (cause): resolves | **pass** |
+| pool-exhaustion (seed 7)      | model (recorded) | not run: no recorded cassette yet (needs an API key; NOTES.md, Phase 3) | —              | —              | —                       | —                  | —                               | —        |
+| bad-rollout-oomkill (seed 42) | scripted fixture | **failed**: Error: script: no fact with key propagation.onset.db        | —              | —              | —                       | —                  | —                               | **fail** |
+| bad-rollout-oomkill (seed 42) | model (recorded) | not run: no recorded cassette yet (needs an API key; NOTES.md, Phase 3) | —              | —              | —                       | —                  | —                               | —        |
+| bad-rollout-oomkill (seed 3)  | scripted fixture | **failed**: Error: script: no fact with key propagation.onset.db        | —              | —              | —                       | —                  | —                               | **fail** |
+| bad-rollout-oomkill (seed 3)  | model (recorded) | not run: no recorded cassette yet (needs an API key; NOTES.md, Phase 3) | —              | —              | —                       | —                  | —                               | —        |
+| bad-rollout-oomkill (seed 7)  | scripted fixture | **failed**: Error: script: no fact with key propagation.onset.db        | —              | —              | —                       | —                  | —                               | **fail** |
+| bad-rollout-oomkill (seed 7)  | model (recorded) | not run: no recorded cassette yet (needs an API key; NOTES.md, Phase 3) | —              | —              | —                       | —                  | —                               | —        |
 
 <!-- eval:end -->
 

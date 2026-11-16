@@ -19,7 +19,7 @@ import {
   type TraceTree,
   type Window,
 } from '@tracepilot/analysis';
-import type { ChangeEvent, DependencyGraph, MetricPoint, Span } from '@tracepilot/schema';
+import type { ChangeEvent, DependencyGraph, MetricPoint, PodEvent, Span } from '@tracepilot/schema';
 import type { Incident, TelemetryStore } from '@tracepilot/store';
 import { z } from 'zod';
 
@@ -72,6 +72,9 @@ export class ToolContext {
   }
   get changes(): ChangeEvent[] {
     return this.memo('changes', () => this.store.listChangeEvents(this.incidentId));
+  }
+  get podEvents(): PodEvent[] {
+    return this.memo('podEvents', () => this.store.listPodEvents(this.incidentId));
   }
 
   /** Symptom and windows inferred from telemetry; null when no user-facing symptom was found. */

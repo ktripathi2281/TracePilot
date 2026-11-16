@@ -1,0 +1,108 @@
+{
+  "scenario": "bad-rollout-oomkill",
+  "note": "Ground truth for the eval harness. Never readable by packages/agents, packages/store or apps/server. Times are virtual microseconds from simulation start. Replay outcomes are what the simulator produced (seeds 42, 3, 7), not what the brief predicted; see NOTES.md, Phase 6.",
+  "rootCause": {
+    "summary": "The checkout v2.5.0 rollout raised per-request memory, so checkout pods exceed their memory limit, are OOMKilled and crash-loop.",
+    "changeEventId": "ev_2",
+    "service": "checkout",
+    "resource": "checkout pod memory limit",
+    "mechanism": "A checkout pod uses 300 MiB plus 6 MiB per request it is processing, under a 512 MiB limit. v2.5.0 builds a per-request pricing cache (40 MiB per request), so a pod dies as soon as it processes six requests at once. Ordinary bursts get there: the pod is OOMKilled, its requests fail, it restarts after a back-off while the other pods take its traffic and die in turn (CrashLoopBackOff). With no ready pod, checkout refuses requests at once (503).",
+    "symptomService": "api-gateway",
+    "hypothesisKinds": ["resource_limit"]
+  },
+  "causalChain": [
+    {
+      "step": "checkout v2.5.0 rolled out: memory per request 6 MiB -> 40 MiB",
+      "service": "checkout",
+      "atUs": 600000000
+    },
+    {
+      "step": "first checkout pod OOMKilled about 1.6 s later (seed 42); the others follow; CrashLoopBackOff",
+      "service": "checkout"
+    },
+    {
+      "step": "replicas_ready drops to 0 for most of the incident; in-flight requests fail with 502, new ones with 503",
+      "service": "checkout"
+    },
+    {
+      "step": "api-gateway returns errors for checkout; downstream payment and inventory calls are cancelled",
+      "service": "api-gateway"
+    }
+  ],
+  "discriminatingEvidence": [
+    "OOMKilled and CrashLoopBackOff pod events for checkout start right after the rollout and before the error rate rises",
+    "replicas_ready for checkout drops; pod_restarts climbs",
+    "the DB connection pool is NOT saturated in the incident window (about 3 % utilized), and hold-and-wait is not detected: scenario A's pattern is absent",
+    "DB query execution time is flat"
+  ],
+  "affectedServices": ["checkout", "api-gateway"],
+  "redHerrings": [
+    {
+      "what": "payment config change ev_1 (request timeout 8s -> 10s)",
+      "atUs": 360000000,
+      "whyNotCausal": "No payment request comes near either timeout; reverting it changes nothing. The change-correlation analyzer still marks it correlated, because the DB blip 95 s later raises payment latency.",
+      "kind": "change",
+      "changeEventId": "ev_1"
+    },
+    {
+      "what": "20 s slowdown of inventory's stock-reservation query at T+7:30",
+      "fromUs": 450000000,
+      "toUs": 470000000,
+      "whyNotCausal": "Self-resolving 2.5 minutes before the rollout: a short error and latency spike, the pool fills briefly and recovers.",
+      "kind": "disturbance",
+      "service": "inventory"
+    },
+    {
+      "what": "inventory config change ev_3 (queue limit 512 -> 600) at T+10:40, after the onset",
+      "atUs": 640000000,
+      "whyNotCausal": "Happens 40 s after the incident began; reverting it changes nothing.",
+      "kind": "change",
+      "changeEventId": "ev_3"
+    }
+  ],
+  "rejectedAlternatives": [
+    {
+      "hypothesis": "The connection pool is exhausted (scenario A's pattern)",
+      "contradictedBy": "pool utilization about 3 % in the incident window; hold-and-wait not detected"
+    },
+    {
+      "hypothesis": "The database is slow",
+      "contradictedBy": "query execution time flat"
+    },
+    {
+      "hypothesis": "The payment config change caused it",
+      "contradictedBy": "it is 4 minutes before the onset, and checkout's pods die first"
+    }
+  ],
+  "fixes": {
+    "resolves": [
+      {
+        "patch": { "revert": "ev_2" },
+        "expected": "no OOMKill; 0 errors; p99 back to baseline (about 130 ms)"
+      },
+      {
+        "patch": { "target": "checkout.memoryLimit", "from": 536870912, "to": 1073741824 },
+        "expected": "no OOMKill; 0 errors; p99 about 130 ms (768 MiB is enough too)"
+      }
+    ],
+    "partial": [
+      {
+        "patch": { "target": "checkout.replicas", "from": 3, "to": 6 },
+        "expected": "seed-dependent: mixed on seeds 42 and 3 (about 4 % errors, a queue forms at checkout), resolves on seed 7. The brief expected 'only delays the failure'; the model does not show that."
+      },
+      {
+        "patch": { "target": "checkout.replicas", "from": 3, "to": 4 },
+        "expected": "seed-dependent: resolves on seeds 42 and 3, 34 % errors on seed 7"
+      }
+    ],
+    "worsens": [],
+    "noEffect": [
+      {
+        "patch": { "target": "db.pool.capacity", "from": 30, "to": 64 },
+        "expected": "same error rate"
+      },
+      { "patch": { "revert": "ev_1" }, "expected": "no change" },
+      { "patch": { "revert": "ev_3" }, "expected": "no change" }
+    ]
+  }
+}

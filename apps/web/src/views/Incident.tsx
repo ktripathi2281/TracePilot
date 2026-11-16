@@ -10,6 +10,7 @@ type Entry = Timeline['entries'][number];
 
 const KIND_COLOR: Record<string, string> = {
   change: '#38bdf8',
+  pod_event: '#e879f9',
   anomaly_onset: '#f59e0b',
   anomaly_recovered: '#71717a',
   log_burst: '#f43f5e',
@@ -25,11 +26,12 @@ function TimelineAxis(props: {
   picked: Entry | null;
 }) {
   const W = 1000;
-  const H = 120;
+  const H = 150;
   const x = (us: number): number => ((us - props.fromUs) / (props.toUs - props.fromUs)) * W;
-  const lanes = ['change', 'anomaly', 'errors'];
+  const lanes = ['change', 'pods', 'anomaly', 'errors'];
   const LANE: Record<string, string> = {
     change: 'change',
+    pod_event: 'pods',
     anomaly_onset: 'anomaly',
     anomaly_recovered: 'anomaly',
     span_onset: 'anomaly',
@@ -46,14 +48,14 @@ function TimelineAxis(props: {
         x={x(baseline.fromUs)}
         y={8}
         width={x(baseline.toUs) - x(baseline.fromUs)}
-        height={92}
+        height={122}
         fill="#10b98110"
       />
       <rect
         x={x(incident.fromUs)}
         y={8}
         width={Math.max(0, x(Math.min(incident.toUs, props.toUs)) - x(incident.fromUs))}
-        height={92}
+        height={122}
         fill="#f43f5e14"
       />
       {lanes.map((l) => (

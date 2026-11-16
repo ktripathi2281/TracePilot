@@ -166,6 +166,8 @@ interface Env {
 interface Waiter {
   active: boolean;
   run: () => void;
+  /** Replica queues only: the pod died while this request waited. */
+  fail?: () => void;
 }
 interface PoolWaiter extends Waiter {
   startTs: number;
@@ -174,6 +176,12 @@ interface PoolWaiter extends Waiter {
 interface Replica {
   busy: number;
   queue: Fifo<Waiter>;
+  /** Pod lifecycle (only for services with a pod model; otherwise always ready). */
+  ready: boolean;
+  /** Kill handles of the requests this pod is processing. */
+  inflight: Set<() => void>;
+  backoffLevel: number;
+  readySince: number;
 }
 
 interface ServiceRt {
@@ -187,6 +195,8 @@ interface ServiceRt {
   windowLatencies: number[];
   windowErrors: number;
   windowRejected: number;
+  /** Pod restarts so far (pod model only). */
+  restarts: number;
   responses: number;
   errors: number;
   rejected: number;
@@ -240,6 +250,8 @@ class Simulation {
   private readonly logs: LogRecord[] = [];
   private readonly metrics: MetricPoint[] = [];
   private readonly changeEvents: ChangeEvent[] = [];
+  private readonly podEvents: PodEvent[] = [];
+  private podSeq = 0;
   private readonly outcomes: RequestOutcome[] = [];
   private readonly draws: Map<string, number> | undefined;
   /** service → step label → disturbances. */
@@ -297,6 +309,10 @@ class Simulation {
         replicas: Array.from({ length: svc.replicas }, () => ({
           busy: 0,
           queue: new Fifo<Waiter>(),
+          ready: true,
+          inflight: new Set<() => void>(),
+          backoffLevel: 0,
+          readySince: 0,
         })),
         rr: 0,
         inFlight: new Gauge(),
@@ -304,6 +320,7 @@ class Simulation {
         windowLatencies: [],
         windowErrors: 0,
         windowRejected: 0,
+        restarts: 0,
         responses: 0,
         errors: 0,
         rejected: 0,
@@ -898,6 +915,111 @@ class Simulation {
 
   // ---- Service calls ------------------------------------------------------------------------
 
+  // ---- Pod lifecycle (services with a pod model) --------------------------------------------
+
+  private podMemory(svc: ServiceRt, replica: Replica): number {
+    const p = svc.cfg.pods;
+    return p === undefined ? 0 : p.memoryBaseBytes + p.memoryPerRequestBytes * replica.busy;
+  }
+
+  private overMemory(svc: ServiceRt, replica: Replica): boolean {
+    const p = svc.cfg.pods;
+    return p !== undefined && this.podMemory(svc, replica) > p.memoryLimitBytes;
+  }
+
+  private podEvent(
+    service: string,
+    pod: string,
+    reason: PodEvent['reason'],
+    message: string,
+  ): void {
+    this.podEvents.push({
+      id: `pe_${(this.podSeq++).toString(36)}`,
+      ts: this.now,
+      service,
+      pod,
+      reason,
+      message,
+    });
+  }
+
+  /** The pod exceeded its memory limit: everything on it fails, and it restarts after a back-off. */
+  private oomKill(svc: ServiceRt, replica: Replica, index: number): void {
+    const p = svc.cfg.pods;
+    if (p === undefined) return;
+    const pod = `${svc.name}-${String(index)}`;
+    const mib = (b: number): number => Math.round(b / 1_048_576);
+    const memory = this.podMemory(svc, replica);
+    const killedRequests = replica.busy;
+    replica.ready = false;
+    svc.restarts++;
+    replica.busy = 0;
+    svc.inFlight.add(this.now, -killedRequests);
+    this.podEvent(
+      svc.name,
+      pod,
+      'OOMKilled',
+      `Container ${svc.name} exceeded its memory limit (${String(mib(memory))} MiB of ${String(mib(p.memoryLimitBytes))} MiB) and was OOMKilled`,
+    );
+    this.log(svc.name, 'error', 'pod OOMKilled', {
+      pod,
+      memoryMiB: mib(memory),
+      limitMiB: mib(p.memoryLimitBytes),
+      inFlight: killedRequests,
+    });
+    const kills = [...replica.inflight];
+    replica.inflight.clear();
+    for (const kill of kills) kill();
+    for (let w = replica.queue.shift(); w !== undefined; w = replica.queue.shift()) {
+      svc.queueDepth.add(this.now, -1);
+      w.fail?.();
+    }
+    if (this.now - replica.readySince >= p.backoffResetUs) replica.backoffLevel = 0;
+    const backoffUs = Math.min(p.maxBackoffUs, p.restartBackoffUs * 2 ** replica.backoffLevel);
+    replica.backoffLevel++;
+    if (replica.backoffLevel > 1) {
+      this.podEvent(
+        svc.name,
+        pod,
+        'CrashLoopBackOff',
+        `Back-off ${String(Math.round(backoffUs / US_PER_S))}s restarting failed container ${svc.name}`,
+      );
+    }
+    this.heap.push(this.now + backoffUs, () => {
+      this.podEvent(svc.name, pod, 'Restarted', `Container ${svc.name} restarted`);
+      this.heap.push(this.now + p.startupUs, () => {
+        replica.ready = true;
+        replica.readySince = this.now;
+        this.podEvent(svc.name, pod, 'Started', `Container ${svc.name} started and is ready`);
+      });
+    });
+  }
+
+  /** Every pod of the service is down: the request is refused at once. */
+  private noReadyPod(
+    req: Req,
+    svc: ServiceRt,
+    opName: string,
+    path: string,
+    parentSpanId: string | null,
+    done: (status: Status, httpStatus: number) => void,
+  ): void {
+    svc.windowLatencies.push(0);
+    svc.responses++;
+    svc.windowErrors++;
+    svc.errors++;
+    svc.rejected++;
+    svc.windowRejected++;
+    if (req.sampled) {
+      this.emitSpan(req, path, parentSpanId, svc.name, opName, this.now, 'error', {
+        [SPAN_ATTRS.requestType]: req.type,
+        [SPAN_ATTRS.httpStatus]: 503,
+      });
+      this.log(svc.name, 'error', 'no ready pod to serve request', { operation: opName }, req);
+    }
+    done('error', 503);
+  }
+
   private pumpReplica(svc: ServiceRt, replica: Replica): void {
     while (replica.busy < svc.cfg.workers) {
       const next = replica.queue.shift();
@@ -923,7 +1045,24 @@ class Simulation {
       throw new Error(`unknown operation ${svcName}.${opName}`);
     }
     const cfg = svc.cfg;
-    const replicaIndex = svc.rr % svc.replicas.length;
+    let replicaIndex = svc.rr % svc.replicas.length;
+    if (cfg.pods !== undefined) {
+      // Round-robin over READY pods only.
+      replicaIndex = -1;
+      for (let k = 0; k < svc.replicas.length; k++) {
+        const i = (svc.rr + k) % svc.replicas.length;
+        if (svc.replicas[i]?.ready === true) {
+          replicaIndex = i;
+          break;
+        }
+      }
+      if (replicaIndex < 0) {
+        svc.rr++;
+        this.noReadyPod(req, svc, opName, path, parentSpanId, done);
+        return;
+      }
+      svc.rr = replicaIndex;
+    }
     const replica = svc.replicas[replicaIndex] as Replica;
     svc.rr++;
     const arrivedAt = this.now;
@@ -999,9 +1138,26 @@ class Simulation {
     const start = (): void => {
       replica.busy++;
       svc.inFlight.add(this.now, 1);
+      // Pod model: the pod can die under this request. The kill answers it at once (the
+      // connection is reset) and lets its work unwind; the pod's counters were already reset.
+      let killed = false;
+      const kill = (): void => {
+        killed = true;
+        respond('error', 502);
+        scope.cancel();
+      };
+      if (cfg.pods !== undefined) {
+        replica.inflight.add(kill);
+        if (this.overMemory(svc, replica)) {
+          this.oomKill(svc, replica, replicaIndex);
+          return;
+        }
+      }
       const env: Env = { req, svc, scope, holdsConn: false, parentSpanId: spanId };
       this.execSteps(env, op.steps, 0, path, (status) => {
         // All steps have unwound: every resource this handler held is already released.
+        if (killed) return;
+        if (cfg.pods !== undefined) replica.inflight.delete(kill);
         replica.busy--;
         svc.inFlight.add(this.now, -1);
         respond(status, HTTP[status]);
@@ -1031,6 +1187,11 @@ class Simulation {
     }
     queued = {
       active: true,
+      fail: () => {
+        queued = undefined; // the dying pod already removed it and adjusted the gauge
+        respond('error', 503);
+        scope.cancel();
+      },
       run: () => {
         queued = undefined; // Fifo.shift() already removed it; the pump adjusted the gauge
         if (req.sampled) {
@@ -1100,6 +1261,18 @@ class Simulation {
       }
       this.point(svc.name, 'in_flight', svc.inFlight.value);
       this.point(svc.name, 'queue_depth', svc.queueDepth.value);
+      if (svc.cfg.pods !== undefined) {
+        let ready = 0;
+        let memory = 0;
+        for (const r of svc.replicas) {
+          if (!r.ready) continue;
+          ready++;
+          memory = Math.max(memory, this.podMemory(svc, r));
+        }
+        this.point(svc.name, 'replicas_ready', ready);
+        this.point(svc.name, 'pod_restarts', svc.restarts);
+        this.point(svc.name, 'memory_working_set', memory);
+      }
       if (svc.windowRejected > 0) {
         this.log(
           svc.name,
@@ -1291,7 +1464,7 @@ class Simulation {
         logs,
         metrics: this.metrics,
         changeEvents: this.changeEvents,
-        podEvents: [],
+        podEvents: this.podEvents,
       },
       outcomes: this.outcomes,
       stats: {

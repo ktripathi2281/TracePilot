@@ -1,7 +1,10 @@
 // Propagation analysis (brief §4.6).
 //
-// 1. Per node, the onset of its earliest INCIDENT-RELEVANT anomaly. Relevant = still ongoing, or
-//    recovered after the incident started. Anomalies that recovered before the incident (such as
+// 1. Per node, the onset of its earliest INCIDENT-RELEVANT anomaly. Relevant = a sign of the node
+//    itself degrading (errors, latency, queues, concurrency or resource use up; ready replicas
+//    down) that is still ongoing or recovered after the incident started. A node receiving LESS
+//    work (request rate, in-flight or latency down) is a consequence of its callers failing, not
+//    a failure of its own, and is excluded with that reason. Anomalies that recovered before the incident (such as
 //    a short, self-resolving blip minutes earlier) are reported as `excluded`, with the reason.
 //    Callers may supply finer, span-refined onsets per node; one is used only if it is
 //    consistent with the metric onset (not later than it by more than the metric resolution).
@@ -25,6 +28,27 @@ import {
   type Precedence,
 } from './precedence.ts';
 import type { Window } from './series.ts';
+
+/** Metric shifts that mean the node itself is degrading. Everything else is a load change. */
+const DEGRADING: Readonly<Record<string, 'up' | 'down'>> = {
+  error_rate: 'up',
+  latency_p50: 'up',
+  latency_p95: 'up',
+  latency_p99: 'up',
+  queue_depth: 'up',
+  in_flight: 'up',
+  pool_in_use: 'up',
+  pool_wait_queue: 'up',
+  query_exec_p95: 'up',
+  db_active_queries: 'up',
+  pod_restarts: 'up',
+  memory_working_set: 'up',
+  cpu_throttled_ratio: 'up',
+  replicas_ready: 'down',
+};
+
+export const isDegrading = (a: Pick<Anomaly, 'metric' | 'direction'>): boolean =>
+  DEGRADING[a.metric] === a.direction;
 
 export interface PropagationOptions {
   /** The incident (symptom) window; anomalies recovered before it starts are excluded. */
@@ -84,6 +108,7 @@ export interface PropagationResult {
     metric: string;
     onsetUs: number;
     endUs: number | null;
+    kind: 'recovered_before_incident' | 'less_work';
     reason: string;
   }[];
   edges: EdgePrecedence[];
@@ -105,11 +130,23 @@ export function analyzePropagation(
         metric: a.metric,
         onsetUs: a.onsetUs,
         endUs: a.endUs,
+        kind: 'recovered_before_incident',
         reason: 'recovered before the incident window started',
       });
       continue;
     }
     if (a.onsetUs >= opts.incident.toUs) continue;
+    if (!isDegrading(a)) {
+      excluded.push({
+        service: a.service,
+        metric: a.metric,
+        onsetUs: a.onsetUs,
+        endUs: a.endUs,
+        kind: 'less_work',
+        reason: `${a.metric} ${a.direction}: less work arriving, not a failure of its own`,
+      });
+      continue;
+    }
     const cur = earliest.get(a.service);
     if (cur === undefined || a.onsetUs < cur.onsetUs) earliest.set(a.service, a);
   }

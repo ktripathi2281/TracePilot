@@ -946,3 +946,78 @@ auto|scripted|cassette|live] [--json] [--write-readme]`. Each run simulates the 
   README table and requires the same scripted rows (cells compared without Prettier's padding).
 - Results on scenario A, seeds 42, 3 and 7: pass on every score (100 % of 96–97 facts valid,
   0 hallucinations, revert ev_2 resolves).
+
+### (c) Scenario D: bad-rollout-oomkill
+
+**What exists**
+
+- Pod lifecycle model in `sim` (`ServiceModel.pods`): each replica is a pod with memory = base +
+  per-request × requests in progress. Over the limit it is OOMKilled: its in-flight requests fail
+  (502), its queued ones too (503), it restarts after an exponential back-off (10 s doubling to
+  160 s; CrashLoopBackOff from the second consecutive kill; reset after 10 min up), and takes
+  traffic again 5 s after restarting. Only ready pods receive traffic; with none, requests get 503
+  at once. Pod events (OOMKilled, CrashLoopBackOff, Restarted, Started) and metrics
+  (`replicas_ready`, `pod_restarts`, `memory_working_set`) are emitted only for services with a
+  pod model, so scenario A's telemetry is byte-identical to before (identity tests unchanged).
+- Knobs: `<service>.memoryLimit` (patchable) and `<service>.memoryPerRequest` (what a rollout
+  changes). `memoryLimit` on a service without a pod model is refused with that reason.
+- `scenarios/bad-rollout-oomkill.ts`: the same topology as A; checkout on 3 pods × 6 workers;
+  rollout ev_2 at T+10:00 raises memory per request 6 → 40 MiB (limit 512 MiB). Red herrings: a
+  payment timeout change (ev_1, T+6:00), a 20 s ×4 slowdown of the stock-reservation query
+  (T+7:30), an inventory queue-limit change after the onset (ev_3, T+10:40).
+- `eval/ground-truth/bad-rollout-oomkill.json` with root cause, causal chain, discriminating
+  evidence, red herrings and the MEASURED replay outcomes.
+- Investigator side (generic, naming no fix): `get_pod_events` tool (findings
+  `pods.<service>.<window>.oom_killed | crash_loop | disrupted`), pod events on the timeline (and
+  a "pods" lane in the UI), hypothesis kind `resource_limit` with its defining prediction
+  (`oom_killed` or `disrupted` true). The investigator prompt (v4) gained one line describing
+  `resource_limit` generically. Its knob list was NOT extended with `memoryLimit`: that would name
+  D's fix. The patch grammar (tool schema) already contains it.
+- Tests: pod lifecycle micro tests (7), scenario D (14): simulator characteristics, analyzer
+  signals without an LLM, replays.
+
+**Measured (seed 42; seeds 3 and 7 agree unless noted)**: first OOMKill 1.6 s after the rollout,
+all three pods killed, 15 OOMKills and 12 CrashLoopBackOffs, `replicas_ready` 0 for most of the
+incident, 66 % of entry requests failed; pool utilization 3.2 % (status ok), hold-and-wait not
+detected, DB execution flat. Replays: revert ev_2 → resolves; memoryLimit 768 MiB or 1 GiB →
+resolves; pool 64 → same error rate; revert ev_1 or ev_3 → no change.
+
+**Where the simulator disagrees with the brief (recorded, not tuned away)**
+
+1. **"Adding replicas only delays the failure"**: the model does not show that. 4 replicas
+   resolve it on seeds 42 and 3 and leave 34 % errors on seed 7; 6 replicas leave ~4 % errors on
+   seeds 42 and 3 (a queue forms) and resolve on seed 7. More pods lower each pod's concurrency
+   below the kill threshold; whether a burst still trips one is seed-dependent. A model where
+   memory also grows with time or queued requests could show the brief's behavior; this one does
+   not, and I did not add such a mechanism to get the expected answer.
+2. **"Latency climbs, errors follow"**: errors rise WITHOUT latency climbing first. A pod is
+   killed the moment it processes six requests, which is exactly when its workers are all busy,
+   so no queue forms before the kill; failures are fast (502/503), and entry p99 even drops.
+3. **Calibration finding**: with 3 pods × 20 workers, the DB-latency blip alone set off scenario
+   A's hold-and-wait jam (60 checkout workers can hold every connection) and the pool stayed jammed
+   from T+7:30. That was scenario A hidden inside D by my configuration. D uses 3 × 6 workers (18,
+   under the 20 that keep the pool from jamming, as in A's baseline). The same mechanism is why
+   adding replicas in D can turn the blip into a jam: replicas add checkout concurrency.
+
+**Analyzer changes and limitations exposed by D**
+
+- **Fixed: propagation counted a node receiving less work as failing.** In D the database's
+  request rate drops (checkout is down), and `analyze_propagation` named db as the origin. Now
+  only degrading signals (errors, latency, queues, concurrency or resource use up; ready replicas
+  down) mark a node; load drops are listed as `less_work` exclusions. Scenario A's results are
+  unchanged. Excluded-anomaly finding keys now include the onset
+  (`propagation.excluded.<service>.<metric>.<onsetUs>`): the verifier caught two findings sharing
+  a key once an anomaly could be excluded for two reasons.
+- **Known limitation: propagation names payment as the origin in D.** When a checkout pod dies,
+  its in-flight payment calls are cancelled, and cancellations count in payment's error rate. The
+  path api-gateway → checkout → payment ends at payment, and its onset is within one metric tick
+  of checkout's, so precedence cannot rule it out. The pod-event tool is what discriminates.
+- **Change correlation marks the payment config change (ev_1) correlated**: the DB blip 95 s
+  later raises payment latency within the 120 s lag. It reports correlation, not cause; the eval
+  checks whether a diagnosis blames it.
+- **Replay fix**: the degraded-time count included a 1 µs sliver at the end of the window as a
+  bucket where "nothing finished". Only full buckets count now.
+
+**Eval**: the scripted fixture fails D on every seed ("no fact with key propagation.onset.db"):
+its fixed procedure assumes a connection-pool incident. That is the expected result for a test
+double; D's investigation needs a model, and no model run is recorded.
