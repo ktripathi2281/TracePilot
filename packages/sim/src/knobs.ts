@@ -4,7 +4,13 @@
 // `db.maxParallelQueries`, `<service>.workers|replicas|queueLimit|timeoutUs`,
 // `<service>.params.<name>`.
 
-import { isRevertPatch, isVariantPatch, type Patch, type VariantPatch } from '@tracepilot/schema';
+import {
+  isRevertPatch,
+  isVariantPatch,
+  type ModelVariant,
+  type Patch,
+  type VariantPatch,
+} from '@tracepilot/schema';
 import {
   DB_SERVICE,
   assertValidConfig,
@@ -27,6 +33,9 @@ const NOT_MODELED: Readonly<Record<string, string>> = {
 
 export class UnsupportedKnobError extends Error {}
 
+/** Structural variants this engine can simulate. The patch grammar lists more (MODEL_VARIANTS). */
+export const MODELED_VARIANTS: readonly ModelVariant[] = ['release-connection-before-calls'];
+
 const holdsAcrossCalls = (steps: readonly Step[]): boolean =>
   steps.some((s) => s.kind !== 'query' && s.kind !== 'compute' && s.kind !== 'transaction');
 
@@ -36,6 +45,10 @@ const holdsAcrossCalls = (steps: readonly Step[]): boolean =>
  * Returns the number of transactions changed.
  */
 function applyVariant(model: SystemModel, patch: VariantPatch): number {
+  if (!MODELED_VARIANTS.includes(patch.variant))
+    throw new UnsupportedKnobError(
+      `variant ${patch.variant} is not modeled by this simulator (modeled: ${MODELED_VARIANTS.join(', ')})`,
+    );
   const svc = model.services[patch.service];
   if (svc === undefined)
     throw new UnsupportedKnobError(

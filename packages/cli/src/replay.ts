@@ -9,8 +9,8 @@
 // (<out>/sim/<id>.json) and checks that the store holds the same telemetry. Results are saved to
 // <out>/replays/. Every output starts and ends with the "simulated model" notice.
 //
-// Exit codes: 0 done; 1 the replay could not be trusted or run (identity replay not exact);
-// 2 bad input (unknown incident, no recording, a patch that does not apply).
+// Exit codes (exit.ts): 0 done; 1 the replay could not be trusted (identity replay not exact);
+// 64 bad input (unknown incident, no recording, a patch that does not apply).
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -41,6 +41,7 @@ import {
 import { UnsupportedKnobError } from '@tracepilot/sim';
 import { TelemetryStore } from '@tracepilot/store';
 import { z } from 'zod';
+import { EXIT } from './exit.ts';
 
 export interface Io {
   out: (line: string) => void;
@@ -84,6 +85,10 @@ function fmtChange(d: Delta): string {
 const pad = (s: string, n: number): string => s.padEnd(n);
 const lpad = (s: string, n: number): string => s.padStart(n);
 
+/** The analysis windows, inferred from the recorded telemetry and used for both runs. */
+export const windowLine = (w: ReplayRun['windows']): string =>
+  `  analysis windows (inferred from the recorded telemetry, same for every run): baseline ${fmtT(w.baseline.fromUs)} – ${fmtT(w.baseline.toUs)}, incident ${fmtT(w.incident.fromUs)} – ${fmtT(w.incident.toUs)}`;
+
 export function renderReplay(run: ReplayRun): string[] {
   const lines: string[] = [REPLAY_NOTICE, ''];
   const patches =
@@ -96,7 +101,8 @@ export function renderReplay(run: ReplayRun): string[] {
   if (run.pins.length > 0) lines.push(`  pinned for the whole run: ${run.pins.join(', ')}`);
   lines.push(
     `  identity replay exact: telemetry ${run.identity.replayedHash.slice(0, 12)} = recorded ${run.identity.recordedHash.slice(0, 12)}`,
-    `  compared on requests that finished in the incident window ${fmtT(run.windows.incident.fromUs)} – ${fmtT(run.windows.incident.toUs)}; (run) = whole run`,
+    windowLine(run.windows),
+    `  compared on requests that finished in the incident window; (run) = whole run`,
     '',
     `  ${pad('', 34)}${lpad('original', 12)}${lpad('replay', 12)}   change`,
   );
@@ -142,10 +148,13 @@ export function renderComparison(c: RecommendationComparison): string[] {
   );
   for (const r of c.rows)
     lines.push(
-      `  ${pad(r.recommendationId, 6)}${pad(r.addresses, 10)}${pad(r.patch, 30)}${pad(r.verdict, 10)}${lpad(pct(r.run.replay.incident.errorRate), 9)}${lpad(fmtDur(r.run.replay.incident.p99Us), 10)}  ${r.newBottlenecks.join(', ') || '—'}`,
+      r.run === null
+        ? `  ${pad(r.recommendationId, 6)}${pad(r.addresses, 10)}${pad(r.patch, 30)}not replayable: ${r.reason ?? ''}`
+        : `  ${pad(r.recommendationId, 6)}${pad(r.addresses, 10)}${pad(r.patch, 30)}${pad(r.verdict, 10)}${lpad(pct(r.run.replay.incident.errorRate), 9)}${lpad(fmtDur(r.run.replay.incident.p99Us), 10)}  ${r.newBottlenecks.join(', ') || '—'}`,
     );
-  const first = c.rows[0]?.run;
-  if (first !== undefined)
+  const first = c.rows.find((r) => r.run !== null)?.run ?? null;
+  if (first !== null) lines.splice(2, 0, windowLine(first.windows));
+  if (first !== null)
     lines.push(
       `  ${pad('orig', 6)}${pad('', 10)}${pad('(no patch)', 30)}${pad('', 10)}${lpad(pct(first.original.incident.errorRate), 9)}${lpad(fmtDur(first.original.incident.p99Us), 10)}`,
     );
@@ -156,6 +165,7 @@ export function renderComparison(c: RecommendationComparison): string[] {
 export function renderSweep(s: Sweep): string[] {
   const lines: string[] = [REPLAY_NOTICE, '', `SWEEP ${s.param} on ${s.incidentId}`];
   if (s.basePatches.length > 0) lines.push(`  with ${s.basePatches.map(formatPatch).join(', ')}`);
+  lines.push(windowLine(s.windows));
   lines.push(
     `  ${lpad('value', 7)}  ${pad('verdict', 10)}${lpad('errors', 8)}${lpad('p50', 10)}${lpad('p99', 10)}${lpad('conn wait', 12)}${lpad('DB queue', 12)}  under pressure`,
   );
@@ -251,12 +261,12 @@ async function guarded(name: string, io: Io, body: () => number): Promise<number
   } catch (e) {
     if (e instanceof IdentityReplayError) {
       io.err(`${name}: ${e.message}`);
-      return 1;
+      return EXIT.failed;
     }
     const input = asInputError(e);
     if (input === null) throw e;
     io.err(`${name}: ${input}`);
-    return 2;
+    return EXIT.usage;
   }
 }
 
@@ -298,10 +308,13 @@ export function replayCommand(args: string[], io: Io): Promise<number> {
         diagnosis.recommendations,
         values.diagnosis,
       );
-      const paths = comparison.rows.map((r) => save(values.out, r.run.id, r.run));
+      const paths = comparison.rows.flatMap((r) =>
+        r.run === null ? [] : [save(values.out, r.run.id, r.run)],
+      );
       if (values.json) io.out(JSON.stringify(comparison));
       else {
         for (const r of comparison.rows) {
+          if (r.run === null) continue;
           for (const line of renderReplay(r.run).slice(2)) io.out(line);
           io.out('');
         }

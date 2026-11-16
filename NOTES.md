@@ -795,3 +795,32 @@ The tests assert the qualitative outcomes (verdict and direction), not these exa
 - **The verdict thresholds** (1 %, 1 s, 5 × baseline p99, 2 buckets) are fixed, not
   configurable.
 - **No LLM narration** of replay results yet (the brief allows it with returned numbers only).
+
+## Phase 4 follow-up — prompt grammar, bare counts, exit codes, windows (2026-11-16)
+
+A small commit before Phase 5.
+
+1. **The investigator prompt (v3) names no structural fix.** The patch grammar lists the variant
+   form generically, `{ "variant": "<name>", "service": "<service>" }`, with example names that are
+   not the modeled one. The schema's `MODEL_VARIANTS` now lists six common structural fixes
+   (async-downstream-calls, batch-queries, cache-reads, circuit-breaker,
+   dedicated-connection-pool, release-connection-before-calls); the simulator models only
+   `release-connection-before-calls` (`MODELED_VARIANTS`). Replaying another variant is refused
+   with a reason, and a diagnosis replay reports that recommendation as `not_replayable` while
+   the others still run. A test checks that no prompt names the modeled variant or describes it
+   ("release the connection", "before calls other services"). The `submit_diagnosis` tool schema
+   still lists all six names as an enum; that is the grammar, and the decoys keep it from pointing
+   at one.
+2. **Bare counts must name their subject.** A number without a unit is grounded only by an anchor
+   that shares a content word with it: the words around the number in its clause, against the
+   words around the anchor in the fact statement plus the fact's finding key and the evidence
+   field or derived-quantity name. "The pool capacity was 30" passes against a pool fact that says
+   "capacity 30"; "30 requests failed" and a lone "30" do not. One test text changed as a result
+   ("All 30 connections" became "All 30 pool connections"): synonyms are not modeled, so a count
+   has to use a word the fact uses. Units and statistic labels work as before.
+3. **Bad input has its own exit code, 64** (EX_USAGE), for every command. 0 done, 1 failed,
+   2 diagnosis published but not verified (investigate only), 64 bad input. The usage text lists
+   them.
+4. **Replay, diagnosis comparison and sweep output print both analysis windows** (baseline and
+   incident, inferred from the recorded telemetry, the same for every run). Sweeps now record
+   `windows` too.

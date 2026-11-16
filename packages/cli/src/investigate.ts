@@ -5,8 +5,8 @@
 // <out>/investigations/<incidentId>.json. Reads the store only: the simulator-side recording in
 // <out>/sim/ is never opened here.
 //
-// Exit codes: 0 verified diagnosis; 1 no diagnosis (inconclusive, budget, API or cassette error);
-// 2 bad input, OR a diagnosis published with unresolved verifier issues (not verified).
+// Exit codes (exit.ts): 0 verified diagnosis; 1 no diagnosis (inconclusive, budget, API or
+// cassette error); 2 a diagnosis published with unresolved verifier issues; 64 bad input.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,6 +29,7 @@ import {
 } from '@tracepilot/agents';
 import { formatPatch, type LedgerEntry } from '@tracepilot/schema';
 import { TelemetryStore } from '@tracepilot/store';
+import { EXIT } from './exit.ts';
 
 export interface Io {
   out: (line: string) => void;
@@ -188,20 +189,20 @@ export async function investigateCommand(
   });
   if (values.incident === undefined) {
     io.err('investigate: --incident is required (sim run prints the incident ID)');
-    return 2;
+    return EXIT.usage;
   }
   let config;
   try {
     config = llmConfigFromEnv(deps.env ?? process.env, values.out);
   } catch (e) {
     io.err(`investigate: ${e instanceof Error ? e.message : String(e)}`);
-    return 2;
+    return EXIT.usage;
   }
   const store = new TelemetryStore(join(values.out, STORE_FILE));
   try {
     if (!store.listIncidents().some((i) => i.id === values.incident)) {
       io.err(`investigate: no incident ${values.incident} in ${join(values.out, STORE_FILE)}`);
-      return 2;
+      return EXIT.usage;
     }
     const llm = new LoggingLlm(
       deps.llm ?? createLlmClient(config, values.incident),
@@ -241,7 +242,7 @@ export async function investigateCommand(
       io.err(
         `investigate: the diagnosis was published with ${String(open)} unresolved verifier issue(s); it is not verified`,
       );
-      return 2;
+      return EXIT.unverified;
     }
     return 0;
   } catch (e) {

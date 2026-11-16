@@ -106,16 +106,53 @@ describe('identity replay', () => {
 describe('replaying the recommended patches (Gate 4)', () => {
   const row = (addresses: 'cause' | 'symptom') => {
     const r = comparison.rows.find((x) => x.addresses === addresses);
-    if (r === undefined) throw new Error(`no ${addresses} recommendation`);
-    return r;
+    if (r === undefined || r.run === null)
+      throw new Error(`no replayed ${addresses} recommendation`);
+    return { ...r, run: r.run };
   };
+  /** The rows that replayed (all of them, for this diagnosis). */
+  const replayed = () =>
+    comparison.rows.flatMap((r) => (r.run === null ? [] : [{ ...r, run: r.run }]));
+
+  it('reports a recommendation it cannot simulate instead of failing the others', () => {
+    const recs = comparison.rows.map((r) => ({
+      id: r.recommendationId,
+      title: r.title,
+      rationale: 'r',
+      patch: r.run?.patches[0] ?? { revert: 'ev_2' },
+      addresses: r.addresses,
+      ledgerEntryIds: ['le_1'],
+    }));
+    const withDecoy = replayer.replayRecommendations(
+      [
+        ...recs,
+        {
+          id: 'rc_3',
+          title: 'Cache reads',
+          rationale: 'r',
+          patch: { variant: 'cache-reads', service: 'inventory' },
+          addresses: 'symptom',
+          ledgerEntryIds: ['le_1'],
+        },
+      ],
+      'x.json',
+    );
+    const decoy = withDecoy.rows.find((r) => r.recommendationId === 'rc_3');
+    expect(decoy).toMatchObject({ verdict: 'not_replayable', run: null });
+    expect(decoy?.reason).toMatch(/cache-reads is not modeled by this simulator/);
+    expect(withDecoy.rows.filter((r) => r.run !== null)).toHaveLength(2);
+    expect(withDecoy.findings.join('\n')).toMatch(
+      /rc_3 \(symptom, cache-reads:inventory\): not replayable/,
+    );
+  });
 
   it('takes the patches from the diagnosis file', () => {
     expect(comparison.rows.map((r) => [r.recommendationId, r.addresses, r.patch])).toEqual([
       ['rc_1', 'cause', 'revert ev_2'],
       ['rc_2', 'symptom', 'db.pool.capacity=64'],
     ]);
-    for (const r of comparison.rows)
+    expect(replayed()).toHaveLength(2);
+    for (const r of replayed())
       expect(r.run.source).toMatchObject({
         kind: 'diagnosis',
         recommendationId: r.recommendationId,
@@ -156,7 +193,7 @@ describe('replaying the recommended patches (Gate 4)', () => {
   });
 
   it('headline numbers are the simulator’s own output, recomputed here independently', () => {
-    for (const r of comparison.rows) {
+    for (const r of replayed()) {
       const direct = runSimulation(
         applyPatches(recording.config, [r.run.patches[0] as Patch]),
         recording.workload,
@@ -280,7 +317,10 @@ describe('the notice', () => {
     expect(REPLAY_NOTICE).toBe(
       'Simulated from a model of the system. Not a guarantee of production behavior.',
     );
-    for (const r of [...runs.values(), ...comparison.rows.map((x) => x.run)])
+    for (const r of [
+      ...runs.values(),
+      ...comparison.rows.flatMap((x) => (x.run === null ? [] : [x.run])),
+    ])
       expect(r.notice).toBe(REPLAY_NOTICE);
     expect(comparison.notice).toBe(REPLAY_NOTICE);
     expect(sweep.notice).toBe(REPLAY_NOTICE);

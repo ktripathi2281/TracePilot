@@ -55,7 +55,18 @@ export type RevertPatch = z.infer<typeof RevertPatch>;
  * code change in reality, so replaying it answers "what if we fixed it", not "what if we turned
  * a dial".
  */
-export const MODEL_VARIANTS = ['release-connection-before-calls'] as const;
+//
+// The list names several common structural fixes. The simulator models only some of them (see
+// MODELED_VARIANTS in @tracepilot/sim); replaying another one is refused with a reason. Listing
+// more than the modeled ones keeps the patch grammar from pointing at any particular fix.
+export const MODEL_VARIANTS = [
+  'async-downstream-calls',
+  'batch-queries',
+  'cache-reads',
+  'circuit-breaker',
+  'dedicated-connection-pool',
+  'release-connection-before-calls',
+] as const;
 export type ModelVariant = (typeof MODEL_VARIANTS)[number];
 
 /** e.g. `{ variant: "release-connection-before-calls", service: "checkout" }`. */

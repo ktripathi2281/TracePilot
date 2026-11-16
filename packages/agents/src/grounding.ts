@@ -16,6 +16,13 @@
 // within the dimension. So "50 connections" does not match a cited "49.7 ms", "a p95 of 7.51 s"
 // does not match a cited "p50 7.51 s, p95 8.01 s", and "30%" does not match a capacity of 30.
 //
+// A BARE COUNT (a number with no unit) must also name its subject: it is grounded only by an
+// anchor that shares a content word with it. The text's words are those around the number in the
+// same clause; the anchor's are the words around it in the fact statement, the fact's finding key,
+// and the evidence field or derived-quantity name. So "a pool of 30 connections" matches a fact
+// about the pool that says "capacity 30", but "30 requests failed" does not, and a lone "30" next
+// to nothing matches nothing.
+//
 // Not checked: digits inside identifiers (p99, ev_2, le_7, v2.4.1, 5xx).
 
 import type { FactEntry } from '@tracepilot/schema';
@@ -30,6 +37,8 @@ export interface Quantity {
   tolerance: number;
   dimension: Dimension;
   label: string | null;
+  /** Content words around the number (stemmed), used to tie a bare count to its subject. */
+  context: string[];
 }
 
 export interface Anchor {
@@ -38,6 +47,8 @@ export interface Anchor {
   value: number;
   dimension: Dimension;
   label: string | null;
+  /** Content words of this anchor's subject (stemmed). */
+  context: string[];
 }
 
 const UNITS: Readonly<Record<string, [Dimension, number]>> = {
@@ -108,6 +119,50 @@ function labelBefore(text: string, index: number): string | null {
   return null;
 }
 
+const STOPWORDS = new Set(
+  'the a an of in on at to was were is are be been and or by for with all only from its their this that than over under about into out per each every after before while when then there here which who has have had not no any some our these those still just also more most less least other same both'.split(
+    ' ',
+  ),
+);
+
+/** Lowercased, crudely singular content words of a phrase or identifier. */
+export function contentWords(text: string): string[] {
+  const words = text
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(/[^A-Za-z]+/)
+    .map((w) => w.toLowerCase())
+    .filter((w) => w.length >= 3 && !STOPWORDS.has(w) && labelOf(w) === null && !(w in UNITS));
+  return [
+    ...new Set(
+      words.map((w) =>
+        w.endsWith('ies') ? `${w.slice(0, -3)}y` : w.length > 3 ? w.replace(/s$/, '') : w,
+      ),
+    ),
+  ];
+}
+
+const CLAUSE = /[,;:()=\n]|\.\s/;
+
+/** Content words around [start, end) of `text`, within the same clause: 4 words before, 3 after. */
+function contextAround(text: string, start: number, end: number): string[] {
+  const before = (
+    text
+      .slice(Math.max(0, start - 60), start)
+      .split(CLAUSE)
+      .at(-1) ?? ''
+  )
+    .trim()
+    .split(/\s+/)
+    .slice(-4)
+    .join(' ');
+  const after = (text.slice(end, end + 60).split(CLAUSE)[0] ?? '')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 3)
+    .join(' ');
+  return contentWords(`${before} ${after}`);
+}
+
 const TIME_RE = /T\+(\d+):(\d\d)(?:\.(\d{1,3}))?/g;
 // A number not inside an identifier or version, optionally followed by a unit.
 const NUMBER_RE =
@@ -129,6 +184,7 @@ export function extractQuantities(text: string): Quantity[] {
         tolerance: 0.5 * 10 ** (6 - digits),
         dimension: 'clock',
         label: null,
+        context: [],
       });
       return ' '.repeat(raw.length);
     },
@@ -144,6 +200,7 @@ export function extractQuantities(text: string): Quantity[] {
       tolerance: 0.5 * 10 ** -decimals * factor,
       dimension,
       label: labelBefore(withoutTimes, m.index),
+      context: contextAround(withoutTimes, m.index, m.index + m[0].length),
     });
   }
   return out;
@@ -162,50 +219,49 @@ export function extractNumbers(text: string): { numbers: Quantity[]; times: Quan
 export function anchorsOf(facts: readonly FactEntry[]): Anchor[] {
   const anchors: Anchor[] = [];
   for (const f of facts) {
+    const key = contentWords(f.findingKey);
+    const ctx = (...more: string[][]): string[] => [...new Set([...key, ...more.flat()])];
     extractQuantities(f.statement).forEach((q, i) => {
       anchors.push({
         source: `${f.id}.statement[${String(i)}]`,
         value: q.value,
         dimension: q.dimension,
         label: q.label,
+        context: ctx(q.context),
       });
     });
     for (const q of f.quantities) {
       const dimension = unitDimension(q.unit);
-      anchors.push({
-        source: `${q.evidenceId}.${q.field}`,
-        value: q.value,
-        dimension,
-        label: null,
-      });
+      const source = `${q.evidenceId}.${q.field}`;
+      const context = ctx(contentWords(q.evidenceId), contentWords(q.field));
+      anchors.push({ source, value: q.value, dimension, label: null, context });
       if (dimension === 'time')
-        anchors.push({
-          source: `${q.evidenceId}.${q.field}`,
-          value: q.value,
-          dimension: 'clock',
-          label: null,
-        });
+        anchors.push({ source, value: q.value, dimension: 'clock', label: null, context });
     }
     for (const q of f.derived) {
       const dimension = unitDimension(q.unit);
       const label = labelFromName(q.name);
-      anchors.push({ source: `${f.id}.${q.name}`, value: q.value, dimension, label });
+      const source = `${f.id}.${q.name}`;
+      const context = ctx(contentWords(q.name));
+      anchors.push({ source, value: q.value, dimension, label, context });
       if (dimension === 'time')
-        anchors.push({
-          source: `${f.id}.${q.name}`,
-          value: q.value,
-          dimension: 'clock',
-          label: null,
-        });
+        anchors.push({ source, value: q.value, dimension: 'clock', label: null, context });
     }
     if (typeof f.value === 'number')
-      anchors.push({ source: `${f.id}.value`, value: f.value, dimension: 'plain', label: null });
+      anchors.push({
+        source: `${f.id}.value`,
+        value: f.value,
+        dimension: 'plain',
+        label: null,
+        context: ctx(),
+      });
     if (f.occurredAt !== undefined)
       anchors.push({
         source: `${f.id}.occurredAt`,
         value: f.occurredAt.tsUs,
         dimension: 'clock',
         label: null,
+        context: ctx(),
       });
   }
   return anchors;
@@ -220,6 +276,7 @@ export function groundingOf(q: Quantity, anchors: readonly Anchor[]): Anchor | n
       (a) =>
         a.dimension === q.dimension &&
         (a.label === null || q.label === null || a.label === q.label) &&
+        (q.dimension !== 'plain' || q.context.some((w) => a.context.includes(w))) &&
         Math.abs(a.value - q.value) <= q.tolerance + EPS * Math.max(1, Math.abs(q.value)),
     ) ?? null
   );
@@ -241,5 +298,6 @@ export function knobQuantity(target: string, value: number): Quantity {
     tolerance: 0.5,
     dimension: /Us$/.test(target) ? 'time' : 'plain',
     label: null,
+    context: contentWords(target),
   };
 }

@@ -168,7 +168,7 @@ describe('tracepilot investigate', () => {
     expect(existsSync(join(dir, 'cassettes'))).toBe(false);
   });
 
-  it('rejects bad input with exit code 2', async () => {
+  it('rejects bad input with exit code 64', async () => {
     const cases: [string[], Record<string, string>, RegExp][] = [
       [['investigate'], {}, /--incident is required/],
       [['investigate', '--incident', 'in_nope', '--out', dir], {}, /no incident in_nope/],
@@ -185,7 +185,7 @@ describe('tracepilot investigate', () => {
     ];
     for (const [argv, env, message] of cases) {
       const c = capture();
-      expect(await main(argv, c.io, { env }), argv.join(' ')).toBe(2);
+      expect(await main(argv, c.io, { env }), argv.join(' ')).toBe(64);
       expect(c.err.join('\n')).toMatch(message);
     }
   });

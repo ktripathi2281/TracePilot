@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { UnsupportedKnobError, applyPatches, getKnob, setKnob } from './knobs.ts';
+import { MODEL_VARIANTS } from '@tracepilot/schema';
+import { MODELED_VARIANTS, UnsupportedKnobError, applyPatches, getKnob, setKnob } from './knobs.ts';
 import { Recording, SimConfig, findConfigProblems } from './model.ts';
 import { poolExhaustionConfig, recordPoolExhaustion } from './scenarios/pool-exhaustion.ts';
 import { recordScenario } from './scenarios/index.ts';
@@ -90,6 +91,14 @@ describe('model variants', () => {
     // A structural variant pins no knob.
     expect(next.pins).toEqual([]);
     expect(SimConfig.parse(JSON.parse(JSON.stringify(next)))).toEqual(next);
+  });
+
+  it('refuses variants the grammar lists but the engine does not model', () => {
+    expect(MODELED_VARIANTS).toEqual(['release-connection-before-calls']);
+    for (const variant of MODEL_VARIANTS.filter((v) => !MODELED_VARIANTS.includes(v)))
+      expect(() => applyPatches(config, [{ variant, service: 'checkout' }]), variant).toThrow(
+        /is not modeled by this simulator/,
+      );
   });
 
   it('is refused where it does not apply', () => {

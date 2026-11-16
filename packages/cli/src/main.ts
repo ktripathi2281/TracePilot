@@ -21,6 +21,7 @@ import {
 } from '@tracepilot/sim';
 import { TelemetryStore } from '@tracepilot/store';
 import { investigateCommand, type InvestigateDeps } from './investigate.ts';
+import { EXIT } from './exit.ts';
 import { replayCommand, sweepCommand } from './replay.ts';
 
 export { SIM_DIR, SimRecordingFile, readSimRecording, simRecordingPath } from '@tracepilot/replay';
@@ -53,6 +54,8 @@ Scenarios: ${Object.keys(SCENARIOS).join(', ')}
 
   Replay results are simulated from a model of the system, not a guarantee of production behavior.
 
+Exit codes: 0 done, 1 failed, 2 diagnosis not verified (investigate), 64 bad input.
+
 Not implemented yet:
   eval (Phase 6)`;
 
@@ -73,18 +76,18 @@ function simRun(args: string[], io: Io): number {
   });
   if (values.scenario === undefined) {
     io.err('sim run: --scenario is required');
-    return 2;
+    return EXIT.usage;
   }
   if (!/^\d+$/.test(values.seed)) {
     io.err(`sim run: --seed must be a non-negative integer, got "${values.seed}"`);
-    return 2;
+    return EXIT.usage;
   }
   const seed = Number(values.seed);
   if (SCENARIOS[values.scenario] === undefined) {
     io.err(
       `sim run: unknown scenario "${values.scenario}". Available: ${Object.keys(SCENARIOS).join(', ')}`,
     );
-    return 2;
+    return EXIT.usage;
   }
 
   const recording = recordScenario(values.scenario, seed);
@@ -146,8 +149,8 @@ export async function main(argv: string[], io: Io, deps: InvestigateDeps = {}): 
   const later = LATER[command];
   if (later !== undefined) {
     io.err(`"${command}" is not implemented yet (${later}).`);
-    return 2;
+    return EXIT.usage;
   }
   io.err(`unknown command: ${argv.join(' ')}\n\n${USAGE}`);
-  return 2;
+  return EXIT.usage;
 }

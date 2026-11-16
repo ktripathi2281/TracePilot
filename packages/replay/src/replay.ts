@@ -16,6 +16,7 @@ import { inferIncidentWindows, toSeries, type Window } from '@tracepilot/analysi
 import type { Recommendation } from '@tracepilot/schema';
 import { ChangeEvent, Patch, formatPatch, type SetPatch } from '@tracepilot/schema';
 import {
+  UnsupportedKnobError,
   applyPatches,
   hashTelemetry,
   runSimulation,
@@ -372,16 +373,25 @@ export class Replayer {
     recommendations: readonly Recommendation[],
     file: string,
   ): RecommendationComparison {
-    const runs = recommendations.map((r) => ({
-      recommendation: r,
-      run: this.replay([r.patch], {
-        kind: 'diagnosis',
-        file,
-        recommendationId: r.id,
-        addresses: r.addresses,
-        title: r.title,
-      }),
-    }));
+    const runs = recommendations.map((r) => {
+      try {
+        return {
+          recommendation: r,
+          run: this.replay([r.patch], {
+            kind: 'diagnosis',
+            file,
+            recommendationId: r.id,
+            addresses: r.addresses,
+            title: r.title,
+          }),
+          reason: null,
+        };
+      } catch (e) {
+        // A patch the model cannot simulate is reported, not fatal: the others still replay.
+        if (!(e instanceof UnsupportedKnobError)) throw e;
+        return { recommendation: r, run: null, reason: e.message };
+      }
+    });
     return compareRecommendations(runs);
   }
 
@@ -416,6 +426,7 @@ export class Replayer {
       incidentId: this.incidentId,
       param,
       basePatches: base,
+      windows: this.windows,
       original: {
         errorRate: this.original.incident.errorRate,
         p99Us: this.original.incident.p99Us,
@@ -440,9 +451,11 @@ export const RecommendationComparison = z.strictObject({
       title: z.string(),
       addresses: z.enum(['cause', 'symptom']),
       patch: z.string(),
-      verdict: Verdict,
+      verdict: z.union([Verdict, z.literal('not_replayable')]),
       newBottlenecks: z.array(z.string()),
-      run: ReplayRun,
+      /** Null when the patch cannot be simulated; `reason` says why. */
+      run: ReplayRun.nullable(),
+      reason: z.string().nullable(),
     }),
   ),
   /** Deterministic summary of the comparison, built from the rows. */
@@ -455,26 +468,32 @@ const dur = (us: number): string =>
   us >= 1_000_000 ? `${(us / 1_000_000).toFixed(2)} s` : `${(us / 1_000).toFixed(1)} ms`;
 
 export function compareRecommendations(
-  runs: readonly { recommendation: Recommendation; run: ReplayRun }[],
+  runs: readonly { recommendation: Recommendation; run: ReplayRun | null; reason: string | null }[],
 ): RecommendationComparison {
-  const rows = runs.map(({ recommendation: r, run }) => ({
+  const rows = runs.map(({ recommendation: r, run, reason }) => ({
     recommendationId: r.id,
     title: r.title,
     addresses: r.addresses,
     patch: formatPatch(r.patch),
-    verdict: run.verdict,
-    newBottlenecks: run.sideEffects
-      .filter((s) => s.kind === 'new_bottleneck' || s.kind === 'queue_formed')
-      .map((s) => s.subject),
+    verdict: run === null ? ('not_replayable' as const) : run.verdict,
+    newBottlenecks:
+      run === null
+        ? []
+        : run.sideEffects
+            .filter((s) => s.kind === 'new_bottleneck' || s.kind === 'queue_formed')
+            .map((s) => s.subject),
     run,
+    reason,
   }));
-  const findings = rows.map(
-    (row) =>
-      `${row.recommendationId} (${row.addresses}, ${row.patch}): ${row.verdict}; error rate ${pct(row.run.original.incident.errorRate)} → ${pct(row.run.replay.incident.errorRate)}, p99 ${dur(row.run.original.incident.p99Us)} → ${dur(row.run.replay.incident.p99Us)}${row.newBottlenecks.length === 0 ? '; no new bottleneck' : `; new pressure at ${row.newBottlenecks.join(', ')}`}.`,
+  const findings = rows.map((row) =>
+    row.run === null
+      ? `${row.recommendationId} (${row.addresses}, ${row.patch}): not replayable: ${row.reason ?? ''}.`
+      : `${row.recommendationId} (${row.addresses}, ${row.patch}): ${row.verdict}; error rate ${pct(row.run.original.incident.errorRate)} → ${pct(row.run.replay.incident.errorRate)}, p99 ${dur(row.run.original.incident.p99Us)} → ${dur(row.run.replay.incident.p99Us)}${row.newBottlenecks.length === 0 ? '; no new bottleneck' : `; new pressure at ${row.newBottlenecks.join(', ')}`}.`,
   );
-  const ok = (v: Verdict): boolean => v === 'resolves' || v === 'improves';
-  const cause = rows.filter((r) => r.addresses === 'cause' && ok(r.verdict));
-  const symptom = rows.filter((r) => r.addresses === 'symptom' && ok(r.verdict));
+  const ran = rows.flatMap((r) => (r.run === null ? [] : [{ ...r, run: r.run }]));
+  const ok = (v: string): boolean => v === 'resolves' || v === 'improves';
+  const cause = ran.filter((r) => r.addresses === 'cause' && ok(r.verdict));
+  const symptom = ran.filter((r) => r.addresses === 'symptom' && ok(r.verdict));
   for (const s of symptom) {
     for (const c of cause) {
       const sp = s.run.replay.incident.p99Us;
@@ -511,6 +530,7 @@ export const Sweep = z.strictObject({
   incidentId: z.string(),
   param: z.string(),
   basePatches: z.array(Patch),
+  windows: z.strictObject({ baseline: WindowSchema, incident: WindowSchema }),
   original: z.strictObject({
     errorRate: z.number(),
     p99Us: z.number(),

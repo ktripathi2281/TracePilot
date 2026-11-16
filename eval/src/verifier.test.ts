@@ -374,9 +374,21 @@ describe('2b. numbers are matched by unit and field, not by magnitude', () => {
   it('a share where the cited fact has a count, and the reverse', () => {
     const pool = 'saturation.db.pool.incident.status';
     expect(factByKey(inv, pool).statement).toMatch(/capacity 30 .*utilization mean 99\.7%/);
-    ok([pool], 'All 30 connections were in use, a mean utilization of 99.7%.');
+    ok([pool], 'All 30 pool connections were in use, a mean utilization of 99.7%.');
     rejected([pool], 'Only 30% of the pool was in use.', '30');
     rejected([pool], 'The pool held 99.7 connections on average.', '99.7');
+  });
+
+  it('a bare count whose subject is not the one the cited fact counts', () => {
+    const pool = 'saturation.db.pool.incident.status';
+    // "capacity 30" in a fact about the pool: a count of connections, not of anything else.
+    ok([pool], 'The pool capacity was 30.');
+    rejected([pool], 'Then 30 requests failed.', '30');
+    rejected([pool], 'It took 30 retries.', '30');
+    // 124 is the count of sampled acquire timeouts in that fact, not of failed requests.
+    expect(factByKey(inv, pool).statement).toMatch(/124 sampled acquire timeouts/);
+    ok([pool], 'There were 124 acquire timeouts.');
+    rejected([pool], 'There were 124 failed checkouts.', '124');
   });
 
   it('a quoted quantity whose unit or field does not match the stored telemetry item', () => {

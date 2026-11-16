@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { FactEntry, Hypothesis, Prediction } from '@tracepilot/schema';
 import { afterAll, describe, expect, it } from 'vitest';
 import { computeConfidence } from './confidence.ts';
-import { extractNumbers, ungroundedNumbers } from './grounding.ts';
+import { contentWords, extractNumbers, ungroundedNumbers } from './grounding.ts';
 import {
   ProposeHypothesesInput,
   statusOf,
@@ -79,6 +79,16 @@ describe('number grounding', () => {
     expect(ungroundedNumbers('Only 30% of the pool was used.', facts)).toEqual(['30']);
     expect(ungroundedNumbers('The p95 hold time was 7.56 s.', facts)).toEqual(['7.56']);
     expect(ungroundedNumbers('The queue held 99.7 requests.', facts)).toEqual(['99.7']);
+    // A bare count must share a subject word with the quantity it repeats.
+    expect(ungroundedNumbers('The pool held 30 connections.', facts)).toEqual([]);
+    expect(ungroundedNumbers('Then 30 requests failed.', facts)).toEqual(['30']);
+    expect(ungroundedNumbers('So 30.', facts)).toEqual(['30']);
+  });
+
+  it('reads the subject words of a phrase or identifier', () => {
+    expect(contentWords('mt_db_pool_in_use_605000000')).toEqual(['pool', 'use']);
+    expect(contentWords('holdP95Us')).toEqual(['hold']);
+    expect(contentWords('the queues of all replicas')).toEqual(['queue', 'replica']);
   });
 
   it('ignores digits inside identifiers and versions', () => {
@@ -682,6 +692,17 @@ describe('prompts', () => {
       expect(sent, name).not.toContain('<!--');
       expect(sent.length, name).toBeGreaterThan(500);
     }
+  });
+
+  it('name no structural fix the replay can model, only example variants', () => {
+    for (const name of ['investigator', 'skeptic', 'verifier'] as const) {
+      const text = loadPrompt(name);
+      expect(text, name).not.toMatch(/release-connection-before-calls/);
+      expect(text, name).not.toMatch(/releas\w* (its|the|a) (pooled )?connection/i);
+      expect(text, name).not.toMatch(/before (it )?calls? other services/i);
+    }
+    // The investigator describes the variant form generically, with examples that are not it.
+    expect(loadPrompt('investigator')).toMatch(/"variant": "<name>"/);
   });
 
   it('contain nothing about a specific system or scenario', () => {

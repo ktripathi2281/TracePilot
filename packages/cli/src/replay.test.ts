@@ -49,6 +49,9 @@ describe('tracepilot replay', () => {
     expect(r.lines[0]).toBe(REPLAY_NOTICE);
     expect(r.lines.at(-1)).toBe(REPLAY_NOTICE);
     expect(r.out).toMatch(/identity replay exact: telemetry (\w{12}) = recorded \1/);
+    expect(r.out).toMatch(
+      /analysis windows \(inferred from the recorded telemetry, same for every run\): baseline T\+\d+:\d\d\.\d{3} – T\+\d+:\d\d\.\d{3}, incident T\+10:00\.000 – T\+15:00\.000/,
+    );
     expect(r.out).toMatch(/requests failed +\d+ +0 +−\d+ \(better\)/);
     expect(r.out).toMatch(/! db\.executor became a bottleneck: saturated/);
     expect(r.out).toMatch(/✓ db\.pool is no longer a bottleneck/);
@@ -128,7 +131,7 @@ describe('tracepilot replay', () => {
     expect(ReplayRun.parse(JSON.parse(r.out)).verdict).toBe('resolves');
   });
 
-  it('rejects bad input with exit code 2', async () => {
+  it('rejects bad input with exit code 64', async () => {
     const file = investigationPath(dir, incidentId);
     const cases: [string[], RegExp][] = [
       [['replay'], /--incident is required/],
@@ -163,7 +166,7 @@ describe('tracepilot replay', () => {
     ];
     for (const [argv, message] of cases) {
       const r = await tool(...argv);
-      expect(r.code, argv.join(' ')).toBe(2);
+      expect(r.code, argv.join(' ')).toBe(64);
       expect(r.err, argv.join(' ')).toMatch(message);
     }
   });
@@ -174,7 +177,7 @@ describe('tracepilot replay', () => {
     unlinkSync(path);
     try {
       const r = await tool('replay', '--incident', incidentId, '--revert', 'ev_2');
-      expect(r.code).toBe(2);
+      expect(r.code).toBe(64);
       expect(r.err).toMatch(
         /no simulator recording for in_\w+ .*Replay works only on incidents produced by `sim run`/,
       );
@@ -201,6 +204,7 @@ describe('tracepilot sweep', () => {
     expect(r.lines[0]).toBe(REPLAY_NOTICE);
     expect(r.lines.at(-1)).toBe(REPLAY_NOTICE);
     expect(r.out).toMatch(/SWEEP db\.pool\.capacity on in_\w+/);
+    expect(r.out).toMatch(/analysis windows .*incident T\+10:00\.000 – T\+15:00\.000/);
     expect(r.out).toMatch(/^ +60 +resolves +0\.0%/m);
     expect(r.out).toMatch(/KNEE 60: /);
     expect(r.out).toMatch(/BOTTLENECK SHIFT from \d+: db\.executor under pressure/);

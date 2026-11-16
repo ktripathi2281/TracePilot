@@ -112,7 +112,7 @@ describe('tracepilot argument handling', () => {
     expect(c.out.join('\n')).toContain('sim run --scenario');
   });
 
-  it('rejects bad input with exit code 2', async () => {
+  it('rejects bad input with exit code 64', async () => {
     for (const argv of [
       ['sim', 'run'],
       ['sim', 'run', '--scenario', 'nope'],
@@ -120,14 +120,14 @@ describe('tracepilot argument handling', () => {
       ['frobnicate'],
     ]) {
       const c = capture();
-      expect(await main(argv, c.io), argv.join(' ')).toBe(2);
+      expect(await main(argv, c.io), argv.join(' ')).toBe(64);
       expect(c.err.length).toBeGreaterThan(0);
     }
   });
 
   it('says which phase brings the commands that do not exist yet', async () => {
     const c = capture();
-    expect(await main(['eval', '--scenario', 'pool-exhaustion'], c.io)).toBe(2);
+    expect(await main(['eval', '--scenario', 'pool-exhaustion'], c.io)).toBe(64);
     expect(c.err.join('\n')).toMatch(/not implemented yet \(Phase 6\)/);
   });
 });
