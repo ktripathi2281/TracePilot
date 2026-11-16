@@ -32,6 +32,7 @@ export interface MicroOptions {
   changes?: SimConfig['changes'];
   disturbances?: SimConfig['disturbances'];
   pins?: string[];
+  cache?: { capacity: number };
 }
 
 export function microConfig(o: MicroOptions): SimConfig {
@@ -47,6 +48,7 @@ export function microConfig(o: MicroOptions): SimConfig {
         maxParallelQueries: o.maxParallelQueries ?? 100,
       },
       requestTypes: { req: { service: entry, operation: 'op' } },
+      ...(o.cache === undefined ? {} : { cache: o.cache }),
     },
     changes: o.changes ?? [],
     disturbances: o.disturbances ?? [],

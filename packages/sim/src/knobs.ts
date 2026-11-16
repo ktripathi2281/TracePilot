@@ -78,6 +78,7 @@ export function getKnob(model: SystemModel, target: string): number | undefined 
   if (dot <= 0) return undefined;
   const component = target.slice(0, dot);
   const key = target.slice(dot + 1);
+  if (component === 'cache') return key === 'capacity' ? model.cache?.capacity : undefined;
   if (component === DB_SERVICE) {
     if (key === 'pool.capacity') return model.db.pool.capacity;
     if (key === 'acquireTimeoutUs') return model.db.acquireTimeoutUs;
@@ -105,6 +106,12 @@ export function setKnob(model: SystemModel, target: string, value: number): bool
   const needPositive = (): void => {
     if (value < 1) throw new Error(`knob ${target}: value must be >= 1`);
   };
+  if (component === 'cache') {
+    needPositive();
+    if (model.cache === undefined) return false;
+    model.cache.capacity = value;
+    return true;
+  }
   if (component === DB_SERVICE) {
     needPositive();
     if (key === 'pool.capacity') model.db.pool.capacity = value;
@@ -158,7 +165,10 @@ export function applyPatches(config: SimConfig, patches: readonly Patch[]): SimC
     }
     const key = patch.target.slice(patch.target.indexOf('.') + 1);
     const why =
-      NOT_MODELED[key] ?? (patch.target === 'cache.capacity' ? 'no cache is modeled' : undefined);
+      NOT_MODELED[key] ??
+      (patch.target === 'cache.capacity' && next.model.cache === undefined
+        ? 'no cache is modeled'
+        : undefined);
     if (why !== undefined) {
       throw new UnsupportedKnobError(`patch target ${patch.target} is not supported: ${why}`);
     }

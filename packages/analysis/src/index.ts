@@ -23,3 +23,4 @@ export * from './windows.ts';
 export * from './onsets.ts';
 export * from './pods.ts';
 export * from './retries.ts';
+export * from './caches.ts';

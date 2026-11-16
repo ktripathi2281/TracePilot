@@ -26,6 +26,8 @@ export const SPAN_NAMES = {
   queueWait: 'queue.wait',
   /** Duration = time one pooled connection is HELD by a transaction (granted → released). */
   dbTransaction: 'db.transaction',
+  /** A cache lookup; attribute cache.hit says whether it was served from the cache. */
+  cacheGet: 'cache.get',
 } as const;
 
 /** Attribute keys the analyzers rely on. */
@@ -47,6 +49,8 @@ export const SPAN_ATTRS = {
   cancelled: 'cancelled',
   /** 1-based attempt number on retried calls. */
   attempt: 'retry.attempt',
+  /** true when a cache lookup was served from the cache. */
+  cacheHit: 'cache.hit',
 } as const;
 
 export const Span = z
@@ -112,6 +116,8 @@ export const MetricName = z.enum([
   'pod_restarts',
   'memory_working_set',
   'cpu_throttled_ratio',
+  // cache (Scenario C)
+  'cache_hit_ratio',
 ]);
 export type MetricName = z.infer<typeof MetricName>;
 
@@ -134,6 +140,7 @@ export const METRIC_UNITS: Readonly<Record<MetricName, MetricUnit>> = {
   pod_restarts: 'count',
   memory_working_set: 'bytes',
   cpu_throttled_ratio: 'ratio',
+  cache_hit_ratio: 'ratio',
 };
 
 export const MetricPoint = z

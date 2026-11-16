@@ -34,6 +34,7 @@ import { getKnob, setKnob } from './knobs.ts';
 import {
   DB_SERVICE,
   assertValidConfig,
+  type CacheStep,
   type CallStep,
   type Dist,
   type Disturbance,
@@ -197,6 +198,10 @@ interface ServiceRt {
   windowRejected: number;
   /** Pod restarts so far (pod model only). */
   restarts: number;
+  /** True when one of its operations has a cache step; only then is cache_hit_ratio emitted. */
+  hasCache: boolean;
+  windowCacheLookups: number;
+  windowCacheHits: number;
   responses: number;
   errors: number;
   rejected: number;
@@ -251,6 +256,8 @@ class Simulation {
   private readonly metrics: MetricPoint[] = [];
   private readonly changeEvents: ChangeEvent[] = [];
   private readonly podEvents: PodEvent[] = [];
+  /** Cache contents per cache step (`service/label`): entries held, and the key space they are for. */
+  private readonly caches = new Map<string, { entries: number; keySpace: number }>();
   private podSeq = 0;
   private readonly outcomes: RequestOutcome[] = [];
   private readonly draws: Map<string, number> | undefined;
@@ -321,6 +328,9 @@ class Simulation {
         windowErrors: 0,
         windowRejected: 0,
         restarts: 0,
+        hasCache: Object.values(svc.operations).some((op) => hasCacheStep(op.steps)),
+        windowCacheLookups: 0,
+        windowCacheHits: 0,
         responses: 0,
         errors: 0,
         rejected: 0,
@@ -790,7 +800,7 @@ class Simulation {
     done: Done,
   ): void {
     const isDbWork = (s: Step): boolean =>
-      s.kind === 'query' || s.kind === 'compute' || s.kind === 'transaction';
+      s.kind === 'query' || s.kind === 'compute' || s.kind === 'transaction' || s.kind === 'cache';
     const segments: { db: boolean; steps: Step[] }[] = [];
     for (const s of steps) {
       const last = segments.at(-1);
@@ -853,6 +863,55 @@ class Simulation {
     runSegment(0);
   }
 
+  /** Cache-aside read; see CacheStep in model.ts. */
+  private execCache(env: Env, step: CacheStep, path: string, done: Done): void {
+    const capacity = this.model.cache?.capacity ?? 0;
+    const keySpace = Math.max(1, env.svc.cfg.params[step.keySpaceParam] ?? 1);
+    const id = `${env.svc.name}/${step.label}`;
+    let state = this.caches.get(id);
+    // The run starts with a warm cache.
+    if (state === undefined)
+      this.caches.set(id, (state = { entries: Math.min(capacity, keySpace), keySpace }));
+    if (state.keySpace !== keySpace) {
+      // New key format: nothing cached matches any more.
+      state.keySpace = keySpace;
+      state.entries = 0;
+    }
+    const cache = state;
+    const hit =
+      uniform(this.seed, env.req.id, `${path}#hit`) < Math.min(cache.entries, keySpace) / keySpace;
+    const startedAt = this.now;
+    const lookupUs = this.drawUs(env, step.label, step.lookup, path);
+    this.heap.push(this.now + lookupUs, () => {
+      env.svc.windowCacheLookups++;
+      if (hit) env.svc.windowCacheHits++;
+      if (env.req.sampled) {
+        this.emitSpan(
+          env.req,
+          childPath(path, 'get'),
+          env.parentSpanId,
+          env.svc.name,
+          SPAN_NAMES.cacheGet,
+          startedAt,
+          'ok',
+          {
+            [SPAN_ATTRS.cacheHit]: hit,
+            [SPAN_ATTRS.dbStatement]: step.label,
+          },
+        );
+      }
+      if (hit || env.scope.cancelled) {
+        done(env.scope.cancelled ? 'cancelled' : 'ok');
+        return;
+      }
+      this.execSteps(env, step.steps, 0, path, (status) => {
+        if (status === 'ok')
+          cache.entries = Math.min(cache.entries + 1, this.model.cache?.capacity ?? 0, keySpace);
+        done(status);
+      });
+    });
+  }
+
   /** Runs `steps` in order as children of `path` (each under its own label). */
   private runSteps(env: Env, steps: readonly Step[], path: string, done: Done): void {
     this.execSteps(env, steps, 0, path, done);
@@ -902,6 +961,9 @@ class Simulation {
           path,
           done,
         );
+        return;
+      case 'cache':
+        this.execCache(env, step, path, done);
         return;
       case 'transaction':
         if (env.holdsConn)
@@ -1261,6 +1323,11 @@ class Simulation {
       }
       this.point(svc.name, 'in_flight', svc.inFlight.value);
       this.point(svc.name, 'queue_depth', svc.queueDepth.value);
+      if (svc.hasCache && svc.windowCacheLookups > 0) {
+        this.point(svc.name, 'cache_hit_ratio', svc.windowCacheHits / svc.windowCacheLookups);
+      }
+      svc.windowCacheLookups = 0;
+      svc.windowCacheHits = 0;
       if (svc.cfg.pods !== undefined) {
         let ready = 0;
         let memory = 0;
@@ -1496,6 +1563,15 @@ class Simulation {
     if (this.draws !== undefined) result.draws = this.draws;
     return result;
   }
+}
+
+function hasCacheStep(steps: readonly Step[]): boolean {
+  return steps.some(
+    (s) =>
+      s.kind === 'cache' ||
+      (s.kind === 'parallel' && s.branches.some(hasCacheStep)) ||
+      ((s.kind === 'fanout' || s.kind === 'transaction') && hasCacheStep(s.steps)),
+  );
 }
 
 /** Trace ids are derived lazily: most requests are not sampled and never need one. */

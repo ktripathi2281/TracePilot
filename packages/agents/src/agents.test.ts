@@ -184,6 +184,7 @@ describe('tool plumbing', () => {
       'correlate_changes',
       'get_pod_events',
       'get_retry_stats',
+      'get_cache_stats',
     ]);
     for (const s of specs) {
       expect(s.input_schema.type, s.name).toBe('object');

@@ -14,5 +14,6 @@ export * from './scenarios/index.ts';
 export * from './scenarios/pool-exhaustion.ts';
 export * from './scenarios/bad-rollout-oomkill.ts';
 export * from './scenarios/retry-storm.ts';
+export * from './scenarios/cache-hit-rate-drop.ts';
 export { uniform, sampleDist, mulberry32 } from './rng.ts';
 export { percentile } from './util.ts';

@@ -1,6 +1,7 @@
 <!--
-investigator.md, v4 (v3: structural variants described generically, naming none of the real
-candidates; v4: adds the generic `resource_limit` kind, no fix named)
+investigator.md, v5 (v3: structural variants described generically, naming none of the real
+candidates; v4: adds the generic `resource_limit` kind; v5: adds the generic `cache_degradation`
+kind; neither names a fix)
 
 Rationale
 - The investigator reasons; it never measures. Every number lives in a FACT created by a tool, so
@@ -44,6 +45,7 @@ A hypothesis is a candidate explanation with a `kind`:
 - `worker_exhaustion`: a service ran out of workers for reasons of its own.
 - `traffic_surge`: more or different traffic arrived.
 - `resource_limit`: a container or process exceeds a resource limit (memory, CPU) and is killed, throttled or restarted.
+- `cache_degradation`: a cache stops absorbing reads (its hit ratio drops), so the load falls through to what it fronts.
 - `change_regression`: a specific change event caused it by a mechanism not covered above.
 - `other`.
 

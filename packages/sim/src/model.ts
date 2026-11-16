@@ -96,8 +96,29 @@ export interface TransactionStep {
    */
   release?: 'around-calls' | undefined;
 }
+/**
+ * Cache-aside read (Scenario C). The lookup takes `lookup` time; it is a hit with probability
+ * entries / keySpace, where keySpace is the service parameter `keySpaceParam` (how many distinct
+ * keys requests use) and entries grows by one per miss up to the cache capacity. On a miss `steps`
+ * (the backing read) run and then fill the cache. When the key space parameter changes (a new key
+ * format), the existing entries no longer match anything and the cache starts empty.
+ */
+export interface CacheStep {
+  kind: 'cache';
+  label: string;
+  keySpaceParam: string;
+  lookup: Dist;
+  steps: Step[];
+}
 export type Step =
-  ComputeStep | QueryStep | ExternalStep | CallStep | ParallelStep | FanoutStep | TransactionStep;
+  | ComputeStep
+  | QueryStep
+  | ExternalStep
+  | CallStep
+  | ParallelStep
+  | FanoutStep
+  | TransactionStep
+  | CacheStep;
 
 export const Step: z.ZodType<Step> = z.lazy(() =>
   z.discriminatedUnion('kind', [
@@ -133,6 +154,13 @@ export const Step: z.ZodType<Step> = z.lazy(() =>
       label: StepLabel,
       steps: z.array(Step).min(1),
       release: z.literal('around-calls').optional(),
+    }),
+    z.strictObject({
+      kind: z.literal('cache'),
+      label: StepLabel,
+      keySpaceParam: z.string().min(1),
+      lookup: Dist,
+      steps: z.array(Step).min(1),
     }),
   ]),
 );
@@ -195,6 +223,8 @@ export const DB_SERVICE = 'db';
 export const SystemModel = z.strictObject({
   services: z.record(ServiceName, ServiceModel),
   db: DbModel,
+  /** Optional shared cache tier (Scenario C): how many entries each cache step can hold. */
+  cache: z.strictObject({ capacity: PositiveInt }).optional(),
   /** Request type → entry point. */
   requestTypes: z.record(
     z.string().regex(/^[a-z][a-z0-9-]*$/),
@@ -275,7 +305,8 @@ function* walkSteps(steps: readonly Step[]): Generator<Step> {
   for (const s of steps) {
     yield s;
     if (s.kind === 'parallel') for (const b of s.branches) yield* walkSteps(b);
-    else if (s.kind === 'fanout' || s.kind === 'transaction') yield* walkSteps(s.steps);
+    else if (s.kind === 'fanout' || s.kind === 'transaction' || s.kind === 'cache')
+      yield* walkSteps(s.steps);
   }
 }
 
@@ -286,7 +317,7 @@ function checkSiblingLabels(steps: readonly Step[], where: string, problems: str
     seen.add(s.label);
     const inner = `${where}/${s.label}`;
     if (s.kind === 'parallel') s.branches.forEach((b) => checkSiblingLabels(b, inner, problems));
-    else if (s.kind === 'fanout' || s.kind === 'transaction')
+    else if (s.kind === 'fanout' || s.kind === 'transaction' || s.kind === 'cache')
       checkSiblingLabels(s.steps, inner, problems);
   }
 }
@@ -310,6 +341,10 @@ export function findConfigProblems(config: SimConfig): string[] {
           out.push(`${s.service}.${s.operation}`);
         } else if (s.kind === 'fanout' && svc.params[s.countParam] === undefined) {
           problems.push(`${here}: fanout reads unknown param "${s.countParam}"`);
+        } else if (s.kind === 'cache') {
+          if (model.cache === undefined) problems.push(`${here}: cache step but no cache tier`);
+          if ((svc.params[s.keySpaceParam] ?? 0) < 1)
+            problems.push(`${here}: cache reads unknown or zero param "${s.keySpaceParam}"`);
         }
       }
       calls.set(here, out);

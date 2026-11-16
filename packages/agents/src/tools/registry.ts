@@ -29,6 +29,7 @@ import {
   medianItems,
   quantile,
   spanEvidence,
+  analyzeCaches,
   analyzeRetries,
   summarizePods,
   type TraceTree,
@@ -496,6 +497,40 @@ Findings: \`saturation.<resource>.<window>.status\`: value saturated (≥95 % ut
     const flagged = res.filter((r) => r.status === 'saturated').map((r) => r.resource);
     return output(
       `Saturated in ${windowWords(w.label)}: ${flagged.length === 0 ? 'nothing' : flagged.join(', ')}.`,
+      findings,
+    );
+  },
+};
+
+// ---- get_cache_stats --------------------------------------------------------------------------
+
+const getCacheStats: ToolDef<typeof WindowOnly> = {
+  name: 'get_cache_stats',
+  description: `Per service with a cache, its hit ratio (metric cache_hit_ratio) in a window against the baseline. Argument: window.
+Findings: \`cache.<service>.<window>.degraded\`: true when the median hit ratio fell by at least 20 points against the baseline median (dated at the first sample below that) | false. The statement gives both medians.`,
+  input: WindowOnly,
+  run: (ctx, args) => {
+    const w = ctx.resolveWindow(args.window);
+    const stats = analyzeCaches(ctx.series, { baseline: ctx.windows.baseline, window: w.window });
+    const findings: Finding[] = stats.map((c) => ({
+      key: `cache.${c.service}.${w.label}.degraded`,
+      statement: `${c.service} cache hit ratio in ${windowWords(w.label)}: median ${fmtPct(c.windowMedian)} against ${fmtPct(c.baselineMedian)} at baseline${c.firstDropUs === null ? '' : `; first below ${fmtPct(Math.max(0, c.baselineMedian - 0.2))} at ${fmtT(c.firstDropUs)}`}.`,
+      value: c.degraded,
+      evidenceIds: c.evidenceIds,
+      quantities: [],
+      derived: [
+        d('baselineMedian', c.baselineMedian, 'ratio'),
+        d('windowMedian', c.windowMedian, 'ratio'),
+      ],
+      ...(c.degraded && c.firstDropUs !== null
+        ? { occurredAt: { tsUs: c.firstDropUs, resolutionUs: ctx.tick } }
+        : {}),
+    }));
+    const degraded = stats.filter((c) => c.degraded).map((c) => c.service);
+    return output(
+      stats.length === 0
+        ? 'No service reports a cache hit ratio.'
+        : `Caches degraded in ${windowWords(w.label)}: ${degraded.length === 0 ? 'none' : degraded.join(', ')}.`,
       findings,
     );
   },
@@ -1133,6 +1168,7 @@ export const DATA_TOOLS: readonly ToolDef[] = [
   correlateChangesTool,
   getPodEvents,
   getRetryStats,
+  getCacheStats,
 ] as readonly ToolDef[];
 
 export const DATA_TOOL_NAMES: readonly string[] = DATA_TOOLS.map((t) => t.name);

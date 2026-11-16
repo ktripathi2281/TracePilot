@@ -1067,3 +1067,51 @@ dependency exhausting the caller's workers, with retries as a minor amplifier.
 
 **Eval**: the scripted fixture fails B on every seed, as it does D. All three scenarios still need
 a recorded model run.
+
+### (e) Scenario C: cache-hit-rate-drop
+
+**What exists**
+
+- Cache model in `sim`: a `cache` step (cache-aside) and a shared cache tier (`model.cache`,
+  knob `cache.capacity`). A lookup hits with probability entries / key space, where the key space
+  is a service parameter (`keySpaceParam`); each miss runs the backing steps and fills one entry
+  up to the capacity; a change of the key-space parameter (a new key format) empties the cache.
+  The run starts warm. Hit/miss draws come from the request's own random stream (common random
+  numbers hold). Spans `cache.get` (attribute `cache.hit`) and the metric `cache_hit_ratio` are
+  emitted only by services with a cache step: A, B and D are byte-identical to before.
+- `scenarios/cache-hit-rate-drop.ts`: the same topology; inventory's stock lookups go through a
+  20,000-entry cache over 21,000 keys (about 95 % hits; a miss reads stock and prices); a heavier
+  stock read rate (300/s) and a 16-query database; checkout releases its connection around calls.
+  inventory v1.9.0 (ev_2, T+10:00) changes the key to include warehouse and customer segment
+  (400,000 keys). Red herrings: A's inventory timeout change (same service) and provider blip.
+- `analyzeCaches` and the `get_cache_stats` tool (`cache.<service>.<window>.degraded`, true when
+  the median hit ratio fell 20 points or more, dated at the first sample below), hypothesis kind
+  `cache_degradation` with its defining prediction, one generic prompt line (v5). Propagation
+  counts a falling hit ratio as degrading. No prompt names a fix; `cache.capacity` is not in the
+  prompt's knob list.
+- `eval/ground-truth/cache-hit-rate-drop.json` with the measured replay outcomes; tests: cache
+  micro tests (5), scenario C (11).
+
+**Measured (seeds 42, 3, 7 agree)**: hit ratio 95 % → 2–5 % from the first sample after the
+deploy; the DB executor saturated (16/16, queue ~14) and the pool full (30/30) of connections
+that are executing or queued, not idle-held; per-query execution time flat; stock p99 48 → ~260 ms;
+checkout p99 ~1.3 s with ~27 % errors (worker exhaustion); 5.7 % of all entry requests fail.
+Replays: revert → resolves (relieves pool, executor and checkout workers); cache 500,000 →
+improves slowly (5.7 % → 3.6 %, p99 still ~1.1 s: the new keys warm one miss at a time);
+pool 64, inventory workers ×2, revert ev_1 → error rate unchanged.
+
+**Where the model is a simplification**: keys are accessed uniformly, so a cold cache warms
+linearly and a larger cache helps slowly. Real key popularity is skewed (a few keys get most
+reads), which makes caches warm much faster; with skew, raising the capacity would likely
+recover more within the window. Not modeled.
+
+**Analyzer behavior worth knowing**: propagation names db as the origin (the failure shows
+there; the cause is upstream in inventory's cache). The connection-pool coverage rule fires
+(the pool is saturated), and "pool too small" is NOT refuted by telemetry here: its defining
+prediction (connections busy, not idle-held) holds. What refutes it is the replay (pool 64
+changes nothing) and the cache evidence; a diagnosis must propose `cache_degradation` to name the
+mechanism.
+
+**Eval**: the scripted fixture completes on C and recommends the right fix (revert ev_2, which
+resolves), but names hold-and-wait as the mechanism: scored as a root-cause miss and an overall
+fail. The harness does not give credit for a fix found for the wrong reason.

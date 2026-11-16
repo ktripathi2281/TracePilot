@@ -27,6 +27,8 @@ export const HypothesisKind = z.enum([
   'traffic_surge',
   /** A container or process exceeds a resource limit (memory, CPU) and is killed, throttled or restarted. */
   'resource_limit',
+  /** A cache stops absorbing reads (its hit ratio drops), so the load falls through to what it fronts. */
+  'cache_degradation',
   /** A specific change event caused it by a mechanism not covered above. */
   'change_regression',
   'other',

@@ -1,0 +1,93 @@
+{
+  "scenario": "cache-hit-rate-drop",
+  "note": "Ground truth for the eval harness. Never readable by packages/agents, packages/store or apps/server. Times are virtual microseconds from simulation start. Replay outcomes are what the simulator produced on seeds 42, 3 and 7; see NOTES.md, Phase 6 (Scenario C).",
+  "rootCause": {
+    "summary": "The inventory v1.9.0 deploy changed the stock cache key; the hit ratio collapsed and the stock reads fell through to the database, which saturated.",
+    "changeEventId": "ev_2",
+    "service": "inventory",
+    "resource": "inventory stock cache (and, as a consequence, the DB executor)",
+    "mechanism": "inventory looks stock up through a 20,000-entry cache over about 21,000 keys (about 95 % hits). v1.9.0 adds warehouse and customer segment to the key: about 400,000 keys, a new key format (every cached entry is useless at once), and even a full cache holds 5 % of them. Nearly every stock lookup now runs two DB queries; the database (16 parallel queries) saturates, queries queue while holding connections, the pool fills with busy connections, and latency climbs for everything that touches the database; checkout runs out of workers and rejects some requests.",
+    "symptomService": "api-gateway",
+    "hypothesisKinds": ["cache_degradation"]
+  },
+  "causalChain": [
+    {
+      "step": "inventory v1.9.0 deployed: stock cache keyed by warehouse and customer segment",
+      "service": "inventory",
+      "atUs": 600000000
+    },
+    {
+      "step": "inventory cache hit ratio falls from about 95 % to about 5 %",
+      "service": "inventory"
+    },
+    {
+      "step": "the DB executor saturates (16 of 16, queue about 14); the pool fills with busy connections",
+      "service": "db"
+    },
+    {
+      "step": "stock and checkout latency climb; checkout's workers fill and it rejects some requests",
+      "service": "api-gateway"
+    }
+  ],
+  "discriminatingEvidence": [
+    "inventory cache_hit_ratio drops right after the deploy, against a steady baseline",
+    "the pool is saturated but its connections are busy executing or queued at the DB (not idle-held): not hold-and-wait",
+    "per-query execution time is flat; the time goes to waiting for a connection and in the DB executor queue: not a slower database",
+    "the DB receives far more queries than at baseline while traffic at the gateway is unchanged"
+  ],
+  "affectedServices": ["inventory", "checkout", "api-gateway"],
+  "redHerrings": [
+    {
+      "what": "inventory config change ev_1 (request timeout 6s -> 8s)",
+      "atUs": 390000000,
+      "whyNotCausal": "The same service as the real cause, 3.5 minutes earlier; no request comes near either limit; reverting it changes nothing.",
+      "kind": "change",
+      "changeEventId": "ev_1"
+    },
+    {
+      "what": "payment provider latency blip at T+7:00",
+      "fromUs": 420000000,
+      "toUs": 440000000,
+      "whyNotCausal": "Self-resolving 3 minutes before the deploy.",
+      "kind": "disturbance",
+      "service": "payment"
+    }
+  ],
+  "rejectedAlternatives": [
+    {
+      "hypothesis": "the connection pool is too small",
+      "contradictedBy": "the pool is full of real DB work, so telemetry alone does not refute it; replay does: a 64-connection pool leaves the error rate unchanged (the queue moves to the DB executor)"
+    },
+    {
+      "hypothesis": "hold-and-wait (scenario A)",
+      "contradictedBy": "in-use connections are executing or queued, not idle-held"
+    },
+    {
+      "hypothesis": "the database got slower",
+      "contradictedBy": "per-query execution time is flat; there are more queries, not slower ones"
+    }
+  ],
+  "fixes": {
+    "resolves": [
+      { "patch": { "revert": "ev_2" }, "expected": "0 errors; p99 back to about 115 ms" }
+    ],
+    "partial": [
+      {
+        "patch": { "target": "cache.capacity", "from": 20000, "to": 500000 },
+        "expected": "improves slowly: the new keys have to be cached one miss at a time (entry error rate 5.7 % -> 3.6 %, p99 still about 1.1 s at the end of the window)"
+      }
+    ],
+    "worsens": [],
+    "noEffect": [
+      {
+        "patch": { "target": "db.pool.capacity", "from": 30, "to": 64 },
+        "expected": "same error rate (the queue moves to the DB executor)"
+      },
+      {
+        "patch": { "target": "inventory.workers", "from": 256, "to": 512 },
+        "expected": "no change"
+      },
+      { "patch": { "revert": "ev_1" }, "expected": "no change" }
+    ]
+  }
+}

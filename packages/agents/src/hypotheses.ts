@@ -136,6 +136,13 @@ const SIGNATURES: Partial<Record<HypothesisKind, Signature>> = {
     describe:
       'analyze_hold_and_wait finding hold_and_wait.<window>.idle_held is false (in-use connections are busy with database work, not held idle)',
   },
+  cache_degradation: {
+    tool: 'get_cache_stats',
+    key: /^cache\.[^.]+\.[^.]+\.degraded$/,
+    expected: true,
+    describe:
+      'get_cache_stats finding cache.<service>.<window>.degraded is true (the hit ratio fell against the baseline)',
+  },
   resource_limit: {
     tool: 'get_pod_events',
     key: /^pods\.[^.]+\.[^.]+\.(oom_killed|disrupted)$/,

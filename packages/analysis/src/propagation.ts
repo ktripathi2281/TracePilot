@@ -45,6 +45,7 @@ const DEGRADING: Readonly<Record<string, 'up' | 'down'>> = {
   memory_working_set: 'up',
   cpu_throttled_ratio: 'up',
   replicas_ready: 'down',
+  cache_hit_ratio: 'down',
 };
 
 export const isDegrading = (a: Pick<Anomaly, 'metric' | 'direction'>): boolean =>
