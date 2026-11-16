@@ -18,6 +18,7 @@
     "@tracepilot/agents": "workspace:*",
     "@tracepilot/eval": "workspace:*",
     "zod": "4.6.7",
-    "@tracepilot/replay": "workspace:*"
+    "@tracepilot/replay": "workspace:*",
+    "@tracepilot/server": "workspace:*"
   }
 }

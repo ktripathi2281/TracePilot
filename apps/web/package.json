@@ -2,15 +2,27 @@
   "name": "@tracepilot/web",
   "version": "0.0.0",
   "private": true,
-  "description": "Web UI (React + Vite + Tailwind, Phase 5).",
+  "description": "Web UI (React + Vite + Tailwind).",
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "dev": "vite",
+    "build": "vite build"
   },
   "dependencies": {
-    "@tracepilot/schema": "workspace:*"
+    "@tracepilot/schema": "workspace:*",
+    "@xyflow/react": "12.12.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "uplot": "1.6.32"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "tailwindcss": "4.3.5",
+    "vite": "8.3.8",
+    "@tracepilot/server": "workspace:*"
   }
 }

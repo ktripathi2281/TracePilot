@@ -2,13 +2,14 @@
 
 AI-native incident investigation + deterministic counterfactual replay for distributed backends.
 
-> **Status: Phase 4 (counterfactual replay); Gate 3 still not verified.** The simulator, the
+> **Status: Phase 5 (server + web UI); Gate 3 still not verified.** The simulator, the
 > `pool-exhaustion` scenario, the telemetry store, the analysis library, the investigation
-> engine (`tracepilot investigate`) and counterfactual replay (`tracepilot replay`, `sweep`)
-> exist. On scenario A the analyzers find the root-cause signals without any LLM (Gate 2), and
-> replaying the recommended patches resolves the simulated incident (Gate 4). The investigation
-> engine is tested with a scripted stand-in for the model; **it has not yet been run against a
-> real model**, which is what Gate 3 requires (see NOTES.md, Phase 3, for how to record that run).
+> engine (`tracepilot investigate`), counterfactual replay (`tracepilot replay`, `sweep`) and the
+> web UI (`tracepilot serve`) exist. On scenario A the analyzers find the root-cause signals
+> without any LLM (Gate 2), and replaying the recommended patches resolves the simulated incident
+> (Gate 4). The investigation engine is tested with a scripted stand-in for the model; **it has
+> not yet been run against a real model**, which is what Gate 3 requires (see NOTES.md, Phase 3,
+> for how to record that run).
 > See [TRACEPILOT_BUILD_BRIEF.md](TRACEPILOT_BUILD_BRIEF.md) for the plan and [NOTES.md](NOTES.md)
 > for the decision log.
 
@@ -93,6 +94,21 @@ Sweep one knob over a range to find the knee and where the bottleneck moves:
 ```bash
 corepack pnpm run tracepilot sweep --incident in_rm6f1z3tf --out .data --param db.pool.capacity --range 20:120:10
 ```
+
+Open the web UI (overview, incident timeline, investigation with clickable evidence, replay lab).
+It needs no API key: it reads the saved investigation and replay records, and replays run in the
+simulator. With no saved investigation, its Investigation view can run the scripted fixture
+(labelled as such) or an investigation with the server's LLM settings.
+
+```bash
+corepack pnpm run web:build
+```
+
+```bash
+corepack pnpm run tracepilot serve --out .data
+```
+
+Then open http://127.0.0.1:4318.
 
 The native SQLite driver (`better-sqlite3`) may compile during install; that needs a C++
 toolchain where no prebuilt binary exists.

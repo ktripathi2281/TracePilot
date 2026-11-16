@@ -824,3 +824,90 @@ A small commit before Phase 5.
 4. **Replay, diagnosis comparison and sweep output print both analysis windows** (baseline and
    incident, inferred from the recorded telemetry, the same for every run). Sweeps now record
    `windows` too.
+
+## Phase 5 — Server and web UI (2026-11-16)
+
+### What exists
+
+- `apps/server` (Hono): REST over the telemetry store and the saved records, SSE for running an
+  investigation, replay and sweep run in-process, and the built UI at `/`.
+  - Telemetry: incidents, overview (headline p99 / failed requests / ok throughput, per-service
+    health, graph edges, changes), timeline, service detail (metric series, slowest sampled traces),
+    trace, evidence by ID.
+  - Investigations: the saved record with its source label; `POST …/investigation/run` streams a new
+    one (`fixture` = scripted test double, `env` = the server's TRACEPILOT_LLM setting) and saves it.
+  - Replay: knob catalog, replay, replay-the-diagnosis, sweep, saved replays.
+- `apps/web` (React 19, Vite 8, Tailwind 4, React Flow for the service graph, uPlot for charts),
+  hash-routed, four views: Overview, Incident, Investigation, Replay lab.
+- `tracepilot serve [--out] [--port]` (default 127.0.0.1:4318); `pnpm run web:build`, `web:dev`
+  (Vite on :5173, proxying `/api`).
+- Tests: server API and information boundary (10), UI smoke test in a real browser (5).
+- Checks at commit time: format ✔, lint ✔, typecheck ✔, tests ✔ (449 passed, 7 skipped: the Gate 3
+  replay tests, still waiting for a recorded run).
+
+### Smoke test status: passes
+
+`eval/src/ui-smoke.test.ts` builds the UI, starts the server on scenario A with a saved
+scripted-fixture investigation and no API key, and clicks through:
+
+1. **Overview:** the three headlines (p99, failed requests, throughput with baselines); the graph
+   nodes with health (checkout failing, db degraded); the changes list.
+2. **Incident:** clicks the checkout node in the graph; two change markers and the anomaly markers
+   on the timeline; picks the deploy marker; the service's charts; opens the slowest trace and
+   finds `db.pool.acquire` in the waterfall.
+3. **Investigation:** source badge `scripted fixture`; three hypotheses (hold-and-wait supported,
+   pool-too-small and DB-slow rejected); diagnosis and verifier; an evidence chip opens the panel
+   with the stored span or metric.
+4. **Replay lab:** follows "replay →" from the cause recommendation (revert pre-ticked); `resolves`
+   with 0 failed requests; sets pool 64 and sees the DB executor side effect; sweeps 40–80 and gets
+   knee 60; the notice is still on screen after scrolling to the sweep.
+
+It also fails on any page error or console error. The browser is the installed Edge or Chrome
+through `playwright-core` (no browser download); `TRACEPILOT_BROWSER` overrides it, and
+`TRACEPILOT_SMOKE_SHOTS=<dir>` keeps a screenshot of each view.
+
+### Decisions (and deviations)
+
+1. **The information boundary is enforced in the server, and tested.** No route reads the data
+   directory's `sim/` except through the Replayer, whose outputs are simulator-computed summaries;
+   eval is never imported (lint). Static serving covers only the built UI's `assets/`; every other
+   path returns `index.html`. The server test collects every response it received (GET, POST, SSE)
+   and checks that none contains simulator-config or ground-truth markers (scenario name,
+   workload, recording, executor size, disturbance text, ground-truth keys), and that no
+   traversal path reaches the recording.
+2. **Knob current values come only from telemetry.** The replay lab shows a current value for the
+   pool (from the `pool_capacity` metric) and for knobs a change event's diff names (checkout
+   workers 60, inventory timeout 8 s). Values only the simulator config has (gateway workers,
+   acquire timeout) are left blank.
+3. **Investigation source** is labelled from the record: `scripted fixture` (test double),
+   `recorded` (replayed cassette) or `live` (live or record mode). A fixture run records its model
+   as `none (scripted fixture)`, not the configured model name.
+4. **The UI computes no numbers.** Headlines and health come from the server (metrics of the
+   entry services: median p99, Σ error_rate × request_rate × tick, median ok throughput); replay
+   figures are simulator output. Health thresholds (failing ≥ 5 % errors; degraded ≥ 1 % or p99
+   ≥ 3 × baseline; the database by pool saturation) are fixed.
+5. **Web imports only types from the server** (`@tracepilot/server/api-types`); a lint rule
+   (`@typescript-eslint/no-restricted-imports`, type imports allowed) stops runtime imports of the
+   server, agents, store or analysis. Responses are not Zod-validated in the browser; the server
+   builds them from validated data.
+6. **The notice** is a sticky banner at the top of the replay lab, on screen at any scroll
+   position, and every replay/sweep payload still carries it.
+7. **Investigations stream over SSE** as the engine reports events; the request is a POST, so the
+   UI reads the stream with `fetch` rather than `EventSource`.
+8. **Replays and sweeps run in the server process**, synchronously (≈1.5 s per replay, ≈7 s for a
+   5-point sweep, ≈14 s for 11 points). Replayers are cached per incident.
+9. **Hash routing** (`#/<view>/<incident>`), so the server needs no route table for the UI.
+10. **The smoke test drives a real browser** rather than jsdom: React Flow and uPlot need layout
+    and canvas. GitHub's Ubuntu runners have Chrome installed, which the test finds by channel.
+
+### Known gaps
+
+- **Replays block the server** while they run (no worker thread); one user at a time is assumed.
+- **One investigation per incident** is kept (`investigations/<id>.json`); a new run replaces it.
+- **The variant dropdown says which variants are modeled.** That is the engine's capability,
+  shown to the human; the prompts still name none.
+- **Health and headline thresholds** are fixed rules, not configurable.
+- **Trace list** shows the 12 slowest sampled traces through a service in the incident window
+  only.
+- **The bundle is ~500 kB** (React Flow and uPlot); no code splitting.
+- **No auth**, by design (brief §12 non-goal): bind to localhost.

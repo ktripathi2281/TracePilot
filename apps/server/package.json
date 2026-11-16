@@ -5,16 +5,21 @@
   "description": "REST + SSE API.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./api-types": "./src/api-types.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@hono/node-server": "2.1.8",
+    "@tracepilot/agents": "workspace:*",
+    "@tracepilot/analysis": "workspace:*",
+    "@tracepilot/replay": "workspace:*",
     "@tracepilot/schema": "workspace:*",
     "@tracepilot/sim": "workspace:*",
     "@tracepilot/store": "workspace:*",
-    "@tracepilot/analysis": "workspace:*",
-    "@tracepilot/agents": "workspace:*"
+    "hono": "4.13.18",
+    "zod": "4.6.7"
   }
 }

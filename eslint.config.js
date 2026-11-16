@@ -170,10 +170,38 @@ export default tseslint.config(
     files: ['apps/server/**'],
     rules: restrictImports({ patterns: [...NO_EVAL, ...NO_SIM_INTERNALS] }),
   },
-  // web: talks to the server over HTTP only.
+  // web: talks to the server over HTTP only. It may import the server's API TYPES (erased at
+  // build time) but no runtime code from the server or the packages behind it.
   {
     files: ['apps/web/**'],
-    rules: restrictImports({ patterns: [...NO_EVAL, ...NO_SIM] }),
+    languageOptions: { globals: { ...globals.browser } },
+    rules: {
+      ...restrictImports({ patterns: [...NO_EVAL, ...NO_SIM] }),
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '@tracepilot/server',
+                '@tracepilot/server/*',
+                '@tracepilot/agents',
+                '@tracepilot/agents/*',
+                '@tracepilot/store',
+                '@tracepilot/analysis',
+              ],
+              allowTypeImports: true,
+              message:
+                'The web UI talks to the server over HTTP; import only types from @tracepilot/server/api-types (brief §1).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['apps/web/vite.config.ts'],
+    languageOptions: { globals: { ...globals.node } },
   },
 
   // ---- Determinism ----------------------------------------------------------------------

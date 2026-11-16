@@ -1,0 +1,36 @@
+@import 'tailwindcss';
+@import 'uplot/dist/uPlot.min.css';
+@import '@xyflow/react/dist/style.css';
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', Menlo, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  font-size: 13px;
+}
+.uplot,
+.u-legend {
+  font-family: var(--font-mono);
+  color: var(--color-zinc-400);
+}
+.uplot .u-legend {
+  font-size: 10px;
+  text-align: left;
+}
+.uplot .u-legend th {
+  font-weight: 400;
+}
+.u-legend .u-marker {
+  width: 8px;
+  height: 8px;
+}
+.react-flow__attribution {
+  display: none;
+}

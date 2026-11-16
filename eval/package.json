@@ -11,12 +11,17 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@tracepilot/agents": "workspace:*",
+    "@tracepilot/analysis": "workspace:*",
+    "@tracepilot/replay": "workspace:*",
     "@tracepilot/schema": "workspace:*",
     "@tracepilot/sim": "workspace:*",
     "@tracepilot/store": "workspace:*",
-    "@tracepilot/agents": "workspace:*",
-    "@tracepilot/analysis": "workspace:*",
-    "zod": "4.6.7",
-    "@tracepilot/replay": "workspace:*"
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@tracepilot/server": "workspace:*",
+    "playwright-core": "1.65.1",
+    "vite": "8.3.8"
   }
 }
