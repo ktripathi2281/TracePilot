@@ -1021,3 +1021,49 @@ resolves; pool 64 → same error rate; revert ev_1 or ev_3 → no change.
 **Eval**: the scripted fixture fails D on every seed ("no fact with key propagation.onset.db"):
 its fixed procedure assumes a connection-pool incident. That is the expected result for a test
 double; D's investigation needs a model, and no model run is recorded.
+
+### (d) Scenario B: slow-dependency-retry-storm
+
+**What exists**
+
+- `scenarios/retry-storm.ts`: the same topology. This checkout version releases its DB connection
+  around downstream calls (no hold-and-wait) and retries payment up to 3 times (100 ms back-off,
+  doubling). payment has a 1.5 s deadline and a fraud-screening step (an external call, 0.9 s
+  median) that the payment v3.2.0 deploy (ev_2, T+10:00) switches on through a step-count
+  parameter. Red herrings: scenario A's inventory timeout change (ev_1) and payment-provider blip
+  (T+7:00, the same service as the real cause).
+- `eval/ground-truth/slow-dependency-retry-storm.json` with the measured replay outcomes. Root
+  cause kind `downstream_slow`.
+- `get_retry_stats` tool and `analyzeRetries` analyzer: per service, the share of requests it
+  received that were retries (`retries.<service>.<window>.amplified`, true at ≥ 5 %). No prompt
+  change: no new hypothesis kind was needed.
+- Tests: 13 (simulator characteristics, analyzer signals, replays).
+
+**Calibration, recorded as it happened**
+
+1. First configuration (checkout 20 workers, payment 2 × 64): checkout's workers capped the load
+   reaching payment (payment's request rate fell from 80/s to 20/s), so retries amplified almost
+   nothing; raising payment's deadline removed the retries and errors barely moved (78 % → 76 %).
+2. To give retries room to amplify I set checkout to 60 workers (safe from A's jam, since this
+   version does not hold connections across calls) and payment to 2 × 40. That is the shipped
+   configuration. **It still is not a retry storm**: payment never runs out of workers (≤ 64 of
+   80), retries are ~15 % of payment's requests (amplification 1.18), and checkout's workers are
+   the bottleneck. I stopped there rather than search for parameters that produce the brief's
+   picture.
+
+**Measured (seeds 42, 3, 7 agree)**: 24 % of entry requests fail, p99 about 3.8 s; checkout
+workers saturated (queue full); payment, the pool (17 %) and the DB are fine; stock requests
+unaffected. Propagation origin: payment (span onsets: payment, then checkout, then the gateway,
+within half a second of the deploy). Replays: revert → resolves; payment deadline 3 s →
+improves (19 % errors, almost no retries, still slow); payment workers ×4, pool 64, revert ev_1
+→ no change; **checkout workers 60 → 120 → worsens (47 % errors)**: checkout now sends enough
+retries to saturate payment (56 % of payment's requests are retries, amplification 2.3). The
+retry storm the brief describes appears exactly when the visible symptom (checkout out of workers)
+is "fixed" by adding workers.
+
+**Where the simulator differs from the brief**: the brief's B is a retry storm; in this model the
+storm is latent (it needs more caller concurrency) and the incident as recorded is a slow
+dependency exhausting the caller's workers, with retries as a minor amplifier.
+
+**Eval**: the scripted fixture fails B on every seed, as it does D. All three scenarios still need
+a recorded model run.

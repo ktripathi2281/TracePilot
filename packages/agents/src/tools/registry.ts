@@ -29,6 +29,7 @@ import {
   medianItems,
   quantile,
   spanEvidence,
+  analyzeRetries,
   summarizePods,
   type TraceTree,
 } from '@tracepilot/analysis';
@@ -495,6 +496,37 @@ Findings: \`saturation.<resource>.<window>.status\`: value saturated (≥95 % ut
     const flagged = res.filter((r) => r.status === 'saturated').map((r) => r.resource);
     return output(
       `Saturated in ${windowWords(w.label)}: ${flagged.length === 0 ? 'nothing' : flagged.join(', ')}.`,
+      findings,
+    );
+  },
+};
+
+// ---- get_retry_stats --------------------------------------------------------------------------
+
+const getRetryStats: ToolDef<typeof WindowOnly> = {
+  name: 'get_retry_stats',
+  description: `Per service, how many of the requests it received in a window were retries by its callers (sampled server spans with retry.attempt > 1). Argument: window.
+Findings: \`retries.<service>.<window>.amplified\`: true when at least 5 % of its requests were retries (callers are multiplying its load) | false. The statement gives requests, retries, their share and the amplification (requests / first attempts).`,
+  input: WindowOnly,
+  run: (ctx, args) => {
+    const w = ctx.resolveWindow(args.window);
+    const stats = analyzeRetries(ctx.spans, w.window);
+    const findings: Finding[] = stats.map((r) => ({
+      key: `retries.${r.service}.${w.label}.amplified`,
+      statement: `${r.service} in ${windowWords(w.label)}: ${String(r.retries)} of ${String(r.requests)} sampled requests were retries (${fmtPct(r.share)}; amplification ${fmtNum(r.amplification)}).`,
+      value: r.share >= 0.05,
+      evidenceIds: r.evidenceIds,
+      quantities: [],
+      derived: [
+        d('requests', r.requests, 'count'),
+        d('retries', r.retries, 'count'),
+        d('retryShare', r.share, 'ratio'),
+        d('amplification', r.amplification, 'value'),
+      ],
+    }));
+    const amplified = stats.filter((r) => r.share >= 0.05).map((r) => r.service);
+    return output(
+      `Retried in ${windowWords(w.label)}: ${amplified.length === 0 ? 'no service above 5 %' : amplified.join(', ')}.`,
       findings,
     );
   },
@@ -1100,6 +1132,7 @@ export const DATA_TOOLS: readonly ToolDef[] = [
   analyzeHoldAndWaitTool,
   correlateChangesTool,
   getPodEvents,
+  getRetryStats,
 ] as readonly ToolDef[];
 
 export const DATA_TOOL_NAMES: readonly string[] = DATA_TOOLS.map((t) => t.name);

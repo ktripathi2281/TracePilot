@@ -1,0 +1,96 @@
+{
+  "scenario": "slow-dependency-retry-storm",
+  "note": "Ground truth for the eval harness. Never readable by packages/agents, packages/store or apps/server. Times are virtual microseconds from simulation start. Replay outcomes are what the simulator produced on seeds 42, 3 and 7; see NOTES.md, Phase 6 (Scenario B) for where this differs from the brief's 'retry storm'.",
+  "rootCause": {
+    "summary": "The payment v3.2.0 deploy made every charge call a slow external fraud-screening service, so payment calls take seconds and checkout runs out of workers waiting for them (and for their retries).",
+    "changeEventId": "ev_2",
+    "service": "payment",
+    "resource": "checkout workers (exhausted by a slow downstream)",
+    "mechanism": "payment v3.2.0 adds a synchronous fraud screening call (about 0.9 s median) to every charge. Charges that exceed payment's 1.5 s deadline return 504 and checkout retries them (up to 3 attempts, about 15 % of payment's requests in the incident are retries). Each checkout request now holds a worker for seconds instead of about 100 ms, checkout's 60 workers fill, its queue fills and it rejects requests: the gateway returns errors for checkout. payment itself is not saturated: checkout's worker limit caps how much work reaches it.",
+    "symptomService": "api-gateway",
+    "hypothesisKinds": ["downstream_slow"]
+  },
+  "causalChain": [
+    {
+      "step": "payment v3.2.0 deployed: synchronous fraud screening before authorization",
+      "service": "payment",
+      "atUs": 600000000
+    },
+    {
+      "step": "payment charges take about a second or more; some exceed the 1.5 s deadline and are retried by checkout",
+      "service": "payment"
+    },
+    {
+      "step": "checkout workers are held through slow charges and retries; checkout's workers and queue fill",
+      "service": "checkout"
+    },
+    {
+      "step": "checkout rejects requests; api-gateway returns errors for checkout (stock requests are unaffected)",
+      "service": "api-gateway"
+    }
+  ],
+  "discriminatingEvidence": [
+    "payment's latency rises first (span onset within a second of the deploy), then checkout's, then the gateway's",
+    "checkout.workers is saturated in the incident window; payment.workers is not; the DB pool is about 17 % utilized",
+    "latency of successful requests is dominated by external calls (the fraud screening), with queue wait second",
+    "retries are about 15 % of payment's requests in the incident window and none at baseline",
+    "DB query execution time is flat; no hold-and-wait"
+  ],
+  "affectedServices": ["payment", "checkout", "api-gateway"],
+  "redHerrings": [
+    {
+      "what": "inventory config change ev_1 (request timeout 6s -> 8s)",
+      "atUs": 390000000,
+      "whyNotCausal": "No inventory request comes near either limit; reverting it changes nothing.",
+      "kind": "change",
+      "changeEventId": "ev_1"
+    },
+    {
+      "what": "payment provider latency blip at T+7:00",
+      "fromUs": 420000000,
+      "toUs": 440000000,
+      "whyNotCausal": "In the same service as the real cause but 3 minutes earlier and self-resolving; payment latency returns to baseline before the deploy.",
+      "kind": "disturbance",
+      "service": "payment"
+    }
+  ],
+  "rejectedAlternatives": [
+    {
+      "hypothesis": "checkout simply has too few workers",
+      "contradictedBy": "it had the same workers at baseline with no queue; doubling them makes things worse in replay"
+    },
+    {
+      "hypothesis": "connection-pool exhaustion (scenario A's pattern)",
+      "contradictedBy": "pool about 17 % utilized, hold-and-wait not detected"
+    },
+    {
+      "hypothesis": "payment is out of capacity",
+      "contradictedBy": "payment.workers not saturated; more payment workers changes nothing in replay"
+    }
+  ],
+  "fixes": {
+    "resolves": [
+      {
+        "patch": { "revert": "ev_2" },
+        "expected": "0 errors; p99 back to about 130 ms"
+      }
+    ],
+    "partial": [
+      {
+        "patch": { "target": "payment.timeoutUs", "from": 1500000, "to": 3000000 },
+        "expected": "improves: errors about 24 % -> 19 %, p99 about 3.9 s -> 3.0 s (fewer timeouts and almost no retries; the calls are still slow)"
+      }
+    ],
+    "worsens": [
+      {
+        "patch": { "target": "checkout.workers", "from": 60, "to": 120 },
+        "expected": "worsens: errors about 24 % -> 47 %; checkout now sends enough retries to saturate payment (56 % of payment's requests are retries, amplification about 2.3): the retry storm"
+      }
+    ],
+    "noEffect": [
+      { "patch": { "target": "payment.workers", "from": 40, "to": 160 }, "expected": "no change" },
+      { "patch": { "target": "db.pool.capacity", "from": 30, "to": 64 }, "expected": "no change" },
+      { "patch": { "revert": "ev_1" }, "expected": "no change" }
+    ]
+  }
+}
