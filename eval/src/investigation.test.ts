@@ -128,6 +128,28 @@ describe('facts come from tools, never from the model', () => {
     ]);
   });
 
+  it('records which model answered, and warns when it is not the one requested', async () => {
+    expect(inv.llm.answeredBy).toEqual([TEST_MODEL]);
+    expect(inv.warnings.join('\n')).not.toMatch(/fallback/);
+    const scripted = new ScriptedLlm(protocolScript());
+    // A client whose answers come from another model, as after a server-side fallback.
+    const fallback: LlmClient = {
+      mode: 'live',
+      complete: async (r) => ({ ...(await scripted.complete(r)), model: 'other-model' }),
+    };
+    const run = await investigate({
+      store: a.store,
+      incidentId: a.incidentId,
+      llm: fallback,
+      model: TEST_MODEL,
+      maxTokens: 1e6,
+    });
+    expect(run.llm.answeredBy).toEqual(['other-model']);
+    expect(run.warnings).toContain(
+      `A investigator request for ${TEST_MODEL} was answered by other-model (server-side fallback).`,
+    );
+  });
+
   it('the record parses against the schema and is deterministic', async () => {
     expect(Investigation.safeParse(inv).success).toBe(true);
     expect(inv).toMatchObject({
@@ -701,6 +723,8 @@ describe('cassettes over a whole investigation', () => {
     const recorded = await run(recorder);
     expect(recorded.llm).toMatchObject({ mode: 'record', recorded: false });
     expect(recorder.recorded).toBe(up.calls());
+    const file = JSON.parse(readFileSync(path, 'utf8')) as { entries: { answeredBy: string }[] };
+    expect(new Set(file.entries.map((e) => e.answeredBy))).toEqual(new Set([TEST_MODEL]));
 
     const replayer = new CassetteLlm('replay', path);
     const replayed = await run(replayer);

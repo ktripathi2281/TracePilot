@@ -516,7 +516,7 @@ record again.
 - `packages/cli`: `tracepilot investigate --incident <id> [--stream] [--out <dir>]`. Saves
   `<out>/investigations/<id>.json` (ledger, hypotheses, skeptic report, verification rounds,
   usage) and appends `<out>/llm-logs/<id>.jsonl`. Exit 0 diagnosed, 1 inconclusive or failed,
-  2 bad input.
+  2 bad input (and, since the follow-up below, a diagnosis with unresolved verifier issues).
 - Tests: agents unit tests (32), verifier on scenario A (33), orchestrator on scenario A (33),
   CLI investigate (10), Gate 3 replay (1 always on, 7 skipped).
 - Checks at commit time: format ✔, lint ✔, typecheck ✔, tests ✔ (373 passed, 7 skipped: schema 22, sim 74, store 13,
@@ -595,7 +595,7 @@ expected}`. The engine runs the tool and compares. A hypothesis is rejected if a
 10. **API usage:** `tool_choice` is left at auto (the current models reject forced tool use),
     so a turn without a tool call is answered with a reminder, 3 times at most.
     Effort is `medium` by default. Prompt caching is on.
-11. **Server-side model fallback is on by default** (`TRACEPILOT_LLM_FALLBACKS=off` disables
+11. _(Changed in the Phase 3 follow-up: now off by default.)_ **Server-side model fallback is on by default** (`TRACEPILOT_LLM_FALLBACKS=off` disables
     it): if the requested model declines a request, the API may answer with another model. The
     usage record prices by the model that answered.
 12. **Verifier model** defaults to the main model. The brief mentions Opus for the final pass;
@@ -603,7 +603,7 @@ expected}`. The engine runs the tool and compares. A hypothesis is rejected if a
 13. **Cassettes:** one file per incident, keyed by SHA-256 of the canonical request. `record`
     replays what is already recorded and records the rest. `replay` fails on any miss and names
     the settings the cassette was recorded with.
-14. **Unresolved issues:** after 2 failed revisions the diagnosis is published with
+14. _(Changed in the Phase 3 follow-up: exit code 2.)_ **Unresolved issues:** after 2 failed revisions the diagnosis is published with
     `unresolvedIssues`, the CLI prints them, and the exit code is still 0. Callers that need a
     verified diagnosis must check that list.
 
@@ -618,7 +618,7 @@ expected}`. The engine runs the tool and compares. A hypothesis is rejected if a
 ### Known gaps
 
 - **Gate 3** (above).
-- **Number grounding is unit-blind and loose for small numbers.** A number passes if it matches
+- _(Fixed in the Phase 3 follow-up.)_ **Number grounding is unit-blind and loose for small numbers.** A number passes if it matches
   any number in the cited facts after rounding, or after scaling by a power of 1000 or by 100. Found in testing:
   "a pool of 50 connections" passed because a cited fact contained a 49.7 ms resolution.
   A wrong small integer can slip through; the reviewer pass is the only other check.
@@ -631,3 +631,34 @@ expected}`. The engine runs the tool and compares. A hypothesis is rejected if a
 - **The request log** keeps the newest message of each request, not the whole request.
 - **Test time:** the verifier and orchestrator tests take about 40 s each, because every
   verification re-runs all tool calls.
+
+## Phase 3 follow-up — verifier units, fallbacks, exit code (2026-11-16)
+
+Three fixes before Phase 4, in their own commit.
+
+1. **Numbers are matched as quantities, not magnitudes.** `grounding.ts` turns every cited fact
+   into anchors, each with a source (`<evidenceId>.<field>` for a value quoted from telemetry,
+   `<factId>.<name>` for a derived value or a number printed in the statement), a dimension
+   (time, clock, share, rate, plain) and an optional statistic label (p50, p95, p99, mean, max,
+   min, read from the words just before the number). A number in model-written text is grounded
+   only by an anchor of the same dimension and, when both name one, the same label, at the
+   precision the text wrote it. Units convert within a dimension (7510 ms = 7.51 s), never across.
+   Patch `from` values are checked the same way (knobs named `...Us` are durations).
+   - Rejected now, accepted before: "a pool of 50 connections" next to a cited 49.7 ms; "the p95
+     hold time was 7.51 s" when the fact says p50 7.51 s, p95 8.01 s; "7.51 ms" for 7.51 s;
+     "30%" for a capacity of 30. Tests in `eval/src/verifier.test.ts` ("2b") on real facts and
+     in `agents.test.ts`.
+   - The verifier also checks each quoted quantity's unit against the stored item: metric values
+     are in the metric's unit, timestamps and durations in µs, `..._us` / `...Us` attributes and
+     diff values in µs, everything else a count. Change-event diff quantities now carry `us` or
+     `count` instead of a generic `value`.
+   - Still loose: a number without a label matches any anchor of its dimension, so a bare count
+     that happens to equal another count in the cited facts passes. Labels are read only from a
+     fixed list of statistic words.
+2. **Server-side fallback is off by default** (`TRACEPILOT_LLM_FALLBACKS=on` enables it; the
+   values are now `on|off`). Every answer records the model that produced it: cassette entries
+   have `answeredBy`, the investigation record has `llm.answeredBy`, and a response from a model
+   other than the requested one adds a warning.
+3. **`tracepilot investigate` exits 2 when a diagnosis is published with unresolved verifier
+   issues**, and says on stderr that it is not verified. Exit 2 therefore means "bad input" or
+   "not verified"; the message tells which.

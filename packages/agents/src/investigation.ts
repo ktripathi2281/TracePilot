@@ -97,6 +97,8 @@ export const Investigation = z.strictObject({
     model: z.string(),
     verifierModel: z.string(),
     effort: z.string(),
+    /** Every model that actually answered a request, as the API reported it. */
+    answeredBy: z.array(z.string()),
   }),
   usage: UsageRecord,
   hypotheses: z.array(Hypothesis),

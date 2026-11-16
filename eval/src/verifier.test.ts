@@ -320,6 +320,99 @@ describe('2. mismatched numbers are rejected', () => {
   });
 });
 
+describe('2b. numbers are matched by unit and field, not by magnitude', () => {
+  /** The verdict on one causal step that cites `keys` and says `text`. */
+  const stepWith = (keys: string[], text: string): VerifierIssue[] => {
+    const ids = keys.map((k) => factByKey(inv, k).id);
+    return verify(
+      edit((d) => {
+        const step = d.causalChain[1];
+        if (step === undefined) throw new Error('fixture');
+        step.ledgerEntryIds = [...ids, factByKey(inv, 'propagation.onset.db').id];
+        step.onsetEntryId = factByKey(inv, 'propagation.onset.db').id;
+        step.statement = text;
+      }),
+    ).filter((i) => i.location === 'causalChain[1]');
+  };
+  const ok = (keys: string[], text: string): void => {
+    expect(stepWith(keys, text), text).toEqual([]);
+  };
+  const rejected = (keys: string[], text: string, token: string): void => {
+    const issues = stepWith(keys, text);
+    expect(issues, text).toEqual([
+      expect.objectContaining({ code: 'ungrounded_number', location: 'causalChain[1]' }),
+    ]);
+    expect(issues[0]?.message, text).toContain(token);
+  };
+
+  it('a count of the right magnitude where the cited fact has a duration', () => {
+    // propagation.onset.db: "resolution 49.7 ms". The old magnitude-only check accepted this.
+    const onset = factByKey(inv, 'propagation.onset.db');
+    expect(onset.statement).toContain('49.7 ms');
+    ok([], 'The pool was observed full within 50 ms.');
+    rejected([], 'A pool of 50 connections filled up.', '50');
+  });
+
+  it('a duration in the wrong unit', () => {
+    const nested = factByKey(inv, 'hold_and_wait.incident.nested_wait');
+    expect(nested.statement).toMatch(/hold p50 7\.51 s, p95 8\.01 s/);
+    ok(['hold_and_wait.incident.nested_wait'], 'Transactions held their connection for 7510 ms.');
+    rejected(
+      ['hold_and_wait.incident.nested_wait'],
+      'Transactions held their connection for 7.51 ms.',
+      '7.51',
+    );
+  });
+
+  it('a statistic attributed to the wrong field', () => {
+    ok(['hold_and_wait.incident.nested_wait'], 'The p95 hold time was 8.01 s.');
+    ok(['hold_and_wait.incident.nested_wait'], 'The median hold time was 7.51 s.');
+    rejected(['hold_and_wait.incident.nested_wait'], 'The p95 hold time was 7.51 s.', '7.51');
+    rejected(['hold_and_wait.incident.nested_wait'], 'The median hold time was 8.01 s.', '8.01');
+  });
+
+  it('a share where the cited fact has a count, and the reverse', () => {
+    const pool = 'saturation.db.pool.incident.status';
+    expect(factByKey(inv, pool).statement).toMatch(/capacity 30 .*utilization mean 99\.7%/);
+    ok([pool], 'All 30 connections were in use, a mean utilization of 99.7%.');
+    rejected([pool], 'Only 30% of the pool was in use.', '30');
+    rejected([pool], 'The pool held 99.7 connections on average.', '99.7');
+  });
+
+  it('a quoted quantity whose unit or field does not match the stored telemetry item', () => {
+    // ev_2 is quoted with its timestamp (µs) and its diff values (counts).
+    const target = factByKey(inv, 'change.ev_2');
+    const tsIndex = target.quantities.findIndex((q) => q.field === 'ts');
+    expect(target.quantities[tsIndex]?.unit).toBe('us');
+    const wrongUnit = ledgerWith(inv, target.id, (f) => ({
+      ...f,
+      quantities: f.quantities.map((q, i) => (i === tsIndex ? { ...q, unit: 'count' } : q)),
+    }));
+    expect(verify(clean, wrongUnit)).toContainEqual(
+      expect.objectContaining({
+        code: 'value_mismatch',
+        location: `ledger:${target.id}`,
+        message: expect.stringContaining('in unit "count", but that field is in "us"') as string,
+      }),
+    );
+    // workers 20 -> 60: quoting the new value as the old one is the right magnitude, wrong field.
+    const toIndex = target.quantities.findIndex((q) => q.field === 'diff.workers.to');
+    expect(target.quantities[toIndex]?.value).toBe(60);
+    const wrongField = ledgerWith(inv, target.id, (f) => ({
+      ...f,
+      quantities: f.quantities.map((q, i) =>
+        i === toIndex ? { ...q, field: 'diff.workers.from' } : q,
+      ),
+    }));
+    expect(verify(clean, wrongField)).toContainEqual(
+      expect.objectContaining({
+        code: 'value_mismatch',
+        message: expect.stringContaining('diff.workers.from = 60, the store has 20') as string,
+      }),
+    );
+  });
+});
+
 describe('3. a HYPOTHESIS used as a premise is rejected', () => {
   const hypothesisEntry = (): LedgerEntry => {
     const e = inv.ledger.find((x) => x.type === 'HYPOTHESIS');

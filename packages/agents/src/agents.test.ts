@@ -58,6 +58,7 @@ describe('number grounding', () => {
       'The pool held 30 connections.',
       'p99 reached 16.33 s (16330 ms).',
       'Transactions held a connection for 7.56 s.', // 7_556_614 µs from a derived quantity
+      'The p50 hold time was 7.56 s.',
       'The pool was full at T+10:00.050, i.e. by T+10:00.',
       'It was saturated from T+10:05.',
     ]) {
@@ -73,6 +74,11 @@ describe('number grounding', () => {
     ]);
     expect(ungroundedNumbers('It began at T+9:41.', facts)).toEqual(['T+9:41']);
     expect(ungroundedNumbers('The pool held 30 connections.', [])).toEqual(['30']);
+    // Right magnitude, wrong unit or field.
+    expect(ungroundedNumbers('The pool held 30 ms of work.', facts)).toEqual(['30']);
+    expect(ungroundedNumbers('Only 30% of the pool was used.', facts)).toEqual(['30']);
+    expect(ungroundedNumbers('The p95 hold time was 7.56 s.', facts)).toEqual(['7.56']);
+    expect(ungroundedNumbers('The queue held 99.7 requests.', facts)).toEqual(['99.7']);
   });
 
   it('ignores digits inside identifiers and versions', () => {
@@ -480,7 +486,7 @@ describe('LLM configuration', () => {
       verifierModel: DEFAULT_MODEL,
       effort: 'medium',
       maxTokensPerInvestigation: DEFAULT_TOKEN_BUDGET,
-      fallbacks: true,
+      fallbacks: false,
     });
     expect(DEFAULT_MODEL).toBe('claude-sonnet-5-5');
     expect(cassettePath(c, 'in_abc')).toBe(join('.data', 'cassettes', 'in_abc.json'));
@@ -495,7 +501,7 @@ describe('LLM configuration', () => {
         TRACEPILOT_EFFORT: 'high',
         MAX_TOKENS_PER_INVESTIGATION: '250000',
         TRACEPILOT_CASSETTE_DIR: 'tapes',
-        TRACEPILOT_LLM_FALLBACKS: 'off',
+        TRACEPILOT_LLM_FALLBACKS: 'on',
       },
       '.data',
     );
@@ -506,7 +512,7 @@ describe('LLM configuration', () => {
       effort: 'high',
       maxTokensPerInvestigation: 250_000,
       cassetteDir: 'tapes',
-      fallbacks: false,
+      fallbacks: true,
     });
     expect(() => llmConfigFromEnv({ TRACEPILOT_LLM: 'offline' }, '.')).toThrow(
       /live, record or replay/,

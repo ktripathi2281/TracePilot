@@ -17,6 +17,7 @@
 
 import {
   ChangeEventId,
+  METRIC_UNITS,
   Patch,
   isRevertPatch,
   type FactEntry,
@@ -26,7 +27,7 @@ import {
 } from '@tracepilot/schema';
 import type { Evidence, TelemetryStore } from '@tracepilot/store';
 import { z } from 'zod';
-import { ungroundedNumbers } from './grounding.ts';
+import { anchorsOf, groundingOf, knobQuantity, ungroundedNumbers } from './grounding.ts';
 import type { Ledger } from './ledger.ts';
 import { ToolContext } from './tools/context.ts';
 import { computeTool } from './tools/runner.ts';
@@ -112,6 +113,18 @@ export function readEvidenceField(e: Evidence, field: string): number | undefine
   }
 }
 
+/**
+ * The unit a quoted field of a stored telemetry item is in; undefined if the item has no such
+ * field. Durations and timestamps are microseconds; metric values are in the metric's unit;
+ * attributes, log fields and diff values named `..._us` / `...Us` are microseconds, others counts.
+ */
+export function readEvidenceUnit(e: Evidence, field: string): string | undefined {
+  if (readEvidenceField(e, field) === undefined) return undefined;
+  if (['ts', 'startUs', 'endUs', 'durationUs'].includes(field)) return 'us';
+  if (e.kind === 'metric') return METRIC_UNITS[e.item.name];
+  return /(_us|Us)(\.(from|to))?$/.test(field) ? 'us' : 'count';
+}
+
 const issue = (
   code: VerifierIssue['code'],
   location: string,
@@ -154,6 +167,15 @@ export function verifyFacts(
             'value_mismatch',
             at,
             `${f.id} quotes ${q.evidenceId}.${q.field}, which that item does not have`,
+            [f.id],
+          ),
+        );
+      } else if (readEvidenceUnit(ev, q.field) !== q.unit) {
+        issues.push(
+          issue(
+            'value_mismatch',
+            at,
+            `${f.id} quotes ${q.evidenceId}.${q.field} in unit "${q.unit}", but that field is in "${String(readEvidenceUnit(ev, q.field))}"`,
             [f.id],
           ),
         );
@@ -531,7 +553,8 @@ export function verifyDraft(draft: DiagnosisDraft, c: DraftContext): VerifierIss
     } else if (r.patch.from !== undefined) {
       // `from` describes the current state, so it is a claim about telemetry. `to` is a proposal.
       const existing = r.ledgerEntryIds.filter((id) => ledger.get(id) !== undefined);
-      if (ungroundedNumbers(String(r.patch.from), ledger.factsBehind(existing)).length > 0) {
+      const from = knobQuantity(r.patch.target, r.patch.from);
+      if (groundingOf(from, anchorsOf(ledger.factsBehind(existing))) === null) {
         issues.push(
           issue(
             'ungrounded_number',

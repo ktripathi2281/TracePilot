@@ -168,6 +168,7 @@ export async function investigate(opts: InvestigateOptions): Promise<Investigati
   const board = new HypothesisBoard();
   const meter = new UsageMeter(opts.maxTokens);
   const warnings: string[] = [];
+  const answeredBy = new Set<string>();
   const verification: VerificationRound[] = [];
   let skeptic: SkepticReport | null = null;
   let revisionRounds = 0;
@@ -197,6 +198,11 @@ export async function investigate(opts: InvestigateOptions): Promise<Investigati
         effort,
       });
       meter.add(a.role, res.model, res.usage);
+      answeredBy.add(res.model);
+      if (res.model !== a.model)
+        warnings.push(
+          `A ${a.role} request for ${a.model} was answered by ${res.model} (server-side fallback).`,
+        );
       emit({
         type: 'usage',
         role: a.role,
@@ -754,6 +760,7 @@ export async function investigate(opts: InvestigateOptions): Promise<Investigati
       model: opts.model,
       verifierModel,
       effort,
+      answeredBy: [...answeredBy].sort(),
     },
     usage: meter.summary(),
     hypotheses: board.hypotheses,

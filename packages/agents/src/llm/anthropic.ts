@@ -6,8 +6,9 @@
 // - Thinking is adaptive (the default when `thinking` is omitted); depth is set with
 //   `output_config.effort`. Assistant content, thinking blocks included, is sent back unchanged.
 // - Top-level `cache_control` caches the growing conversation prefix between tool-loop turns.
-// - Server-side refusal fallback is on by default (`fallbacks: "default"`), so a policy decline
-//   by the requested model is retried on its default fallback model inside the same call.
+// - Server-side refusal fallback is OFF by default. When enabled (`fallbacks: "default"`), a
+//   policy decline by the requested model is retried on another model inside the same call, so
+//   the answer may come from a model nobody asked for. The answering model is always recorded.
 
 import Anthropic from '@anthropic-ai/sdk';
 import { LlmRefusalError, type LlmClient, type LlmRequest, type LlmResponse } from './types.ts';
@@ -15,7 +16,7 @@ import { LlmRefusalError, type LlmClient, type LlmRequest, type LlmResponse } fr
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
 export interface AnthropicLlmOptions {
-  /** Server-side refusal fallback. Default true. */
+  /** Server-side refusal fallback. Default false. */
   fallbacks?: boolean;
 }
 
@@ -28,7 +29,7 @@ export class AnthropicLlm implements LlmClient {
     // Credentials are resolved by the SDK from the environment (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN
     // or an `ant auth login` profile). TracePilot never reads or stores a key itself.
     this.client = new Anthropic();
-    this.fallbacks = options.fallbacks ?? true;
+    this.fallbacks = options.fallbacks ?? false;
   }
 
   async complete(request: LlmRequest): Promise<LlmResponse> {

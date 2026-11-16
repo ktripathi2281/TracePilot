@@ -4,6 +4,9 @@
 // record (ledger, hypotheses, skeptic, verification rounds, usage) to
 // <out>/investigations/<incidentId>.json. Reads the store only: the simulator-side recording in
 // <out>/sim/ is never opened here.
+//
+// Exit codes: 0 verified diagnosis; 1 no diagnosis (inconclusive, budget, API or cassette error);
+// 2 bad input, OR a diagnosis published with unresolved verifier issues (not verified).
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -232,7 +235,15 @@ export async function investigateCommand(
     for (const line of renderInvestigation(inv)) io.out(line);
     io.out(`saved  ${investigationPath(values.out, values.incident)}`);
     io.out(`llm log ${llmLogPath(values.out, values.incident)}`);
-    return inv.outcome === 'diagnosed' ? 0 : 1;
+    if (inv.outcome !== 'diagnosed') return 1;
+    const open = inv.diagnosis?.unresolvedIssues.length ?? 0;
+    if (open > 0) {
+      io.err(
+        `investigate: the diagnosis was published with ${String(open)} unresolved verifier issue(s); it is not verified`,
+      );
+      return 2;
+    }
+    return 0;
   } catch (e) {
     const known =
       e instanceof CassetteMissError ||

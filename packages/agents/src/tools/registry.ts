@@ -37,6 +37,9 @@ import { WindowArg } from './context.ts';
 import type { Finding, Row, ToolDef, ToolOutput } from './types.ts';
 
 const d = (name: string, value: number, unit: string): DerivedQuantity => ({ name, value, unit });
+
+/** Unit of a numeric value in a change-event diff: knobs named `...Us` are microseconds. */
+export const diffUnit = (key: string): string => (/Us$/.test(key) ? 'us' : 'count');
 const uniq = (ids: readonly string[], max = 6): string[] => [...new Set(ids)].slice(0, max);
 
 /** Findings must cite evidence; one without any becomes a note instead of a fact. */
@@ -147,14 +150,14 @@ Findings: \`change.<id>\`: value is the kind (deploy|config|rollout); the statem
             evidenceId: c.id,
             field: `diff.${key}.from`,
             value: v.from,
-            unit: 'value',
+            unit: diffUnit(key),
           });
         if (typeof v.to === 'number')
           quantities.push({
             evidenceId: c.id,
             field: `diff.${key}.to`,
             value: v.to,
-            unit: 'value',
+            unit: diffUnit(key),
           });
       }
       return {

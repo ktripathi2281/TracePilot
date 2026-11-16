@@ -18,7 +18,7 @@ export interface LlmConfig {
   maxTokensPerInvestigation: number;
   /** TRACEPILOT_CASSETTE_DIR. Default <dataDir>/cassettes. */
   cassetteDir: string;
-  /** TRACEPILOT_LLM_FALLBACKS: default | off. */
+  /** TRACEPILOT_LLM_FALLBACKS: on | off. Default off: every answer comes from the requested model. */
   fallbacks: boolean;
 }
 
@@ -46,9 +46,9 @@ export function llmConfigFromEnv(
       `MAX_TOKENS_PER_INVESTIGATION must be a positive integer, got "${String(rawBudget)}"`,
     );
   }
-  const fallbacks = env['TRACEPILOT_LLM_FALLBACKS'] ?? 'default';
-  if (fallbacks !== 'default' && fallbacks !== 'off')
-    throw new Error(`TRACEPILOT_LLM_FALLBACKS must be default or off, got "${fallbacks}"`);
+  const fallbacks = env['TRACEPILOT_LLM_FALLBACKS'] || 'off';
+  if (fallbacks !== 'on' && fallbacks !== 'off')
+    throw new Error(`TRACEPILOT_LLM_FALLBACKS must be on or off, got "${fallbacks}"`);
   const model = env['TRACEPILOT_MODEL'] || DEFAULT_MODEL;
   return {
     mode,
@@ -57,7 +57,7 @@ export function llmConfigFromEnv(
     effort: effort as Effort,
     maxTokensPerInvestigation: budget,
     cassetteDir: env['TRACEPILOT_CASSETTE_DIR'] || join(dataDir, 'cassettes'),
-    fallbacks: fallbacks === 'default',
+    fallbacks: fallbacks === 'on',
   };
 }
 

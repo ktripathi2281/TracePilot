@@ -120,6 +120,32 @@ describe('tracepilot investigate', () => {
     );
   });
 
+  it('exits 2 when the diagnosis is published with unresolved verifier issues', async () => {
+    const base = protocolScript();
+    const c = capture();
+    const exit = await main(['investigate', '--incident', incidentId, '--out', dir], c.io, {
+      // Every draft carries a number no fact contains, so it never passes the verifier.
+      llm: new ScriptedLlm((request) => {
+        const out = base(request);
+        if (typeof out === 'string') return out;
+        return out.map((call) => {
+          if (call.name !== 'submit_diagnosis') return call;
+          const input = structuredClone(call.input) as { rootCause: { statement: string } };
+          input.rootCause.statement += ' It lasted 98765 ms.';
+          return { name: call.name, input };
+        });
+      }),
+      env: {},
+    });
+    expect(exit).toBe(2);
+    expect(c.out.join('\n')).toMatch(
+      /UNRESOLVED VERIFIER ISSUES \(published after 2 revision rounds\)/,
+    );
+    expect(c.err.join('\n')).toMatch(
+      /published with 1 unresolved verifier issue\(s\); it is not verified/,
+    );
+  });
+
   it('stops with exit 1 when the token budget is exceeded', async () => {
     const c = capture();
     const exit = await main(['investigate', '--incident', incidentId, '--out', dir], c.io, {

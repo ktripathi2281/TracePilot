@@ -23,6 +23,8 @@ export class CassetteMissError extends Error {}
 
 const Entry = z.strictObject({
   hash: z.string().regex(/^[0-9a-f]{64}$/),
+  /** The model that produced the response (it differs from request.model only after a fallback). */
+  answeredBy: z.string(),
   /** For humans reading the file; the hash covers the full request. */
   request: z.strictObject({
     model: z.string(),
@@ -128,6 +130,7 @@ export class CassetteLlm implements LlmClient {
     this.byHash.set(hash, response);
     this.file.entries.push({
       hash,
+      answeredBy: response.model,
       request: {
         model: request.model,
         effort: request.effort,
